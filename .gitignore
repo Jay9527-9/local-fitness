@@ -13,6 +13,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.ci-venv/
 
 # 工具产物
 Tools/*.log

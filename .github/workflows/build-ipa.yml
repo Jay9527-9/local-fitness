@@ -55,7 +55,14 @@ jobs:
         run: |
           # 硬性门禁：iOS 版本兼容性、Info.plist、工程声明、资源完整性。
           # 目标设备 iOS 16.3.1，任何 iOS 17 专属 API 残留都会在此中断。
-          pip3 install --quiet pyyaml
+          #
+          # macos-14 runner 上的 Homebrew Python 受 PEP 668 保护，直接
+          # `pip3 install` 会以 "externally-managed-environment" 失败并中断整步，
+          # 所以装进一个临时 venv，再把它的 bin 放进 PATH。
+          python3 -m venv .ci-venv
+          .ci-venv/bin/pip install --quiet --disable-pip-version-check pyyaml
+          export PATH="$PWD/.ci-venv/bin:$PATH"
+          python3 -c "import yaml; print('pyyaml', yaml.__version__)"
           python3 Tools/preflight.py
 
       - name: Swift structure lint
