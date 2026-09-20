@@ -256,9 +256,49 @@ TrollStore 走 CoreTrust 漏洞做 perma-sign，**要求 IPA 未签名** ——
 | `Tools/probe_pageNN_semantics.py` | L4 逐页值语义推演（46 个） |
 | `Tools/audit_call_sites.py` | L5 跨文件调用点一致性 |
 | `Tools/audit_body_size.py` | L6 视图体规模 |
-| `.github/workflows/build-ipa.yml` | GitHub Actions 工作流（13 步） |
+| `Tools/audit_enum_arity.py` | L7 枚举模式绑定的关联值个数 |
+| `Tools/verify_refactor_equivalence.py` | 拆方法后证明逻辑是纯搬运（基准钉 `db3df0a`） |
+| `.github/workflows/build-ipa.yml` | GitHub Actions 工作流（15 步） |
 | `.gitattributes` | 媒体标 `binary`，文本统一 `eol=lf` |
 | `README.md` | 完整工程说明书，§二 是 IPA 打包指引 |
+
+---
+
+## 六之二、产出物校验（下载后必做）
+
+**「能下载」不等于「能装」。** 解包查结构才算数：
+
+```python
+import zipfile, plistlib
+zi = zipfile.ZipFile('FitnessApp-unsigned.ipa')
+assert zi.testzip() is None                        # CRC 全通过
+n = zi.namelist()
+assert 'Payload/FitnessApp.app/Info.plist' in n    # 有 app 目录
+exe = [x for x in n if x.endswith('FitnessApp.app/FitnessApp')][0]
+assert zi.read(exe)[:4] == b'\xcf\xfa\xed\xfe'     # arm64 Mach-O
+pl = plistlib.loads(zi.read('Payload/FitnessApp.app/Info.plist'))
+assert pl['MinimumOSVersion'] == '16.0'            # 设备可装
+assert not [x for x in n if '_CodeSignature' in x] # 必须无真签名
+assert not [x for x in n if 'mobileprovision' in x]
+media = [x for x in n if '/ExerciseMedia/' in x and not x.endswith('/')]
+assert len(media) == 2648                          # 媒体齐全
+```
+
+已验证的实际值（`FitnessApp-unsigned.ipa`，132,344,218 字节，
+SHA256 `d2930c57d593a7504d0ee1c87a0b8659fcd88df90ff3fa36804480d123c09644`）：
+
+| 项 | 值 |
+|---|---|
+| Mach-O | `cffaedfe`（arm64）/ 18,648,336 字节 |
+| `MinimumOSVersion` | 16.0 |
+| `UIDeviceFamily` | `[1, 2]`（iPhone + iPad） |
+| `CFBundleIdentifier` | `com.local.fitness.trainnote` |
+| 媒体 | jpg 1324 + gif 1324 = 2648 |
+| `_CodeSignature` / `mobileprovision` | 均 **0** 条（未签名，TrollStore 需要的形式） |
+
+> **注意**：工程内 `FitnessApp/Resources/ExerciseMedia/` 在本机是 **0 个文件**
+> （媒体未提交进仓库，由 CI 上 `download_media.py` 补齐）。
+> 所以「本机源目录为空」**不代表** IPA 缺媒体 —— 要查就查 IPA 内部。
 
 ---
 
