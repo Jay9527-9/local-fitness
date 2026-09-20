@@ -267,8 +267,11 @@ TrollStore 走 CoreTrust 漏洞做 perma-sign，**要求 IPA 未签名** ——
 | `Tools/audit_call_sites.py` | L5 跨文件调用点一致性 |
 | `Tools/audit_body_size.py` | L6 视图体规模 |
 | `Tools/audit_enum_arity.py` | L7 枚举模式绑定的关联值个数 |
+| `Tools/audit_exercise_library_perf.py` | **L8 性能与布局回归（49 条断言）** |
 | `Tools/verify_refactor_equivalence.py` | 拆方法后证明逻辑是纯搬运（基准钉 `db3df0a`） |
-| `.github/workflows/build-ipa.yml` | GitHub Actions 工作流（15 步） |
+| `Tools/parallel_download.py` | 8 并发 Range 分块下载 CI 构件（绕开 Azure Blob 单连接限速） |
+| `Tools/verify_ipa.py` | 内层 IPA 结构断言（递归剥壳 + 6 组断言） |
+| `.github/workflows/build-ipa.yml` | GitHub Actions 工作流（16 步） |
 | `.gitattributes` | 媒体标 `binary`，文本统一 `eol=lf` |
 | `README.md` | 完整工程说明书，§二 是 IPA 打包指引 |
 
@@ -276,35 +279,61 @@ TrollStore 走 CoreTrust 漏洞做 perma-sign，**要求 IPA 未签名** ——
 
 ## 六之二、产出物校验（下载后必做）
 
-**「能下载」不等于「能装」。** 解包查结构才算数：
+**「能下载」不等于「能装」。** 解包查结构才算数。已把这件事固化成脚本：
 
-```python
-import zipfile, plistlib
-zi = zipfile.ZipFile('FitnessApp-unsigned.ipa')
-assert zi.testzip() is None                        # CRC 全通过
-n = zi.namelist()
-assert 'Payload/FitnessApp.app/Info.plist' in n    # 有 app 目录
-exe = [x for x in n if x.endswith('FitnessApp.app/FitnessApp')][0]
-assert zi.read(exe)[:4] == b'\xcf\xfa\xed\xfe'     # arm64 Mach-O
-pl = plistlib.loads(zi.read('Payload/FitnessApp.app/Info.plist'))
-assert pl['MinimumOSVersion'] == '16.0'            # 设备可装
-assert not [x for x in n if '_CodeSignature' in x] # 必须无真签名
-assert not [x for x in n if 'mobileprovision' in x]
-media = [x for x in n if '/ExerciseMedia/' in x and not x.endswith('/')]
-assert len(media) == 2648                          # 媒体齐全
+```bash
+python Tools/verify_ipa.py FitnessApp-unsigned-v2.ipa
 ```
 
-已验证的实际值（`FitnessApp-unsigned.ipa`，132,344,218 字节，
-SHA256 `d2930c57d593a7504d0ee1c87a0b8659fcd88df90ff3fa36804480d123c09644`）：
+**先说三层嵌套**（这里踩过两次坑，务必记住）：
+
+```
+GitHub Actions 构件 zip            ← 你从网页/API 下载到的就是这个
+  └── FitnessApp-unsigned.ipa      ← 真 IPA，132 MB
+        └── Payload/FitnessApp.app/**   ← app 包内容
+```
+
+所以「解包」要**剥两层**才对得上 `Payload/`。脚本会自动逐层剥壳，
+并在第 0 行打印剥壳链，方便肉眼确认：
+
+```
+0. 层级剥壳               : FitnessApp-unsigned-v2.ipa → FitnessApp-unsigned.ipa (132354695 字节)
+   条目总数               : 2657
+```
+
+断言项（6 组，任一失败退出码非 0）：
+
+| # | 断言 | 说明 |
+|---|---|---|
+| 1 | 内层 zip `testzip()` 为 `None` | CRC 全通过 |
+| 2 | jpg == 1324 且 gif == 1324 | 媒体齐全（**两个数都要**，不要只查合计） |
+| 3 | `Info.plist` 的 `CFBundleIdentifier` / `MinimumOSVersion` / `UIDeviceFamily` | app 身份 + 可装性 |
+| 4 | 可执行文件存在、Mach-O magic `feedfacf`、cputype 低 24 位 == 12 | arm64 |
+| 5 | `_CodeSignature` **0** 条、`mobileprovision` **0** 条 | 未签名，TrollStore 需要的形式 |
+| 6 | `Payload/FitnessApp.app/exerciseLibrary.seed.json` 存在 | 种子数据落位 |
+
+**已实测通过**（`FitnessApp-unsigned-v2.ipa`，131,977,015 字节，
+run `35511946358` / `ea15a7e`，构件 `10605947464`）：
 
 | 项 | 值 |
 |---|---|
-| Mach-O | `cffaedfe`（arm64）/ 18,648,336 字节 |
+| 内层 IPA | 132,354,695 字节，条目 2657 |
+| Mach-O | `feedfacf`（MH_MAGIC_64）/ cputype 12（arm64）/ 18,676,272 字节 |
 | `MinimumOSVersion` | 16.0 |
 | `UIDeviceFamily` | `[1, 2]`（iPhone + iPad） |
 | `CFBundleIdentifier` | `com.local.fitness.trainnote` |
-| 媒体 | jpg 1324 + gif 1324 = 2648 |
-| `_CodeSignature` / `mobileprovision` | 均 **0** 条（未签名，TrollStore 需要的形式） |
+| `CFBundleExecutable` | `FitnessApp` |
+| 媒体 | jpg 1324 + gif 1324 = 2648，位于 `ExerciseMedia/images/` 与 `ExerciseMedia/videos/` |
+| `_CodeSignature` / `mobileprovision` | 均 **0** 条 |
+| app 包根文件 | `Info.plist` / `PkgInfo` / `FitnessApp` / `exerciseLibrary.seed.json` |
+
+> **两个已修正的判据错误**（写脚本时别再犯）：
+> 1. 用 `n.count("/") == 1` 判 `Info.plist` / 可执行文件 ——
+>    `Payload/FitnessApp.app/Info.plist` 是**两层**斜杠，永远匹配不上，
+>    表现为「条目总数 2657 但 Info.plist 未找到」这种自相矛盾的输出。
+>    正确写法：`n.startswith("Payload/FitnessApp.app/") and n.count("/") == 2`。
+> 2. 只剥一层就取 `namelist()` —— 拿到的是**构件 zip 的外壳**，
+>    条目总数会是 1（就一个 `.ipa` 条目）。要先按 `.ipa` 后缀下钻。
 
 > **注意**：工程内 `FitnessApp/Resources/ExerciseMedia/` 在本机是 **0 个文件**
 > （媒体未提交进仓库，由 CI 上 `download_media.py` 补齐）。
