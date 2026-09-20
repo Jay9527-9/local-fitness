@@ -486,12 +486,12 @@ private struct ProfileTab: View {
             CardioSessionView(
                 repository: repository,
                 sessionID: sessionID,
-                onFinished: { finished in
-                    path.append(ProfileRoute.sessionSummary(finished.id))
-                },
                 onMinimize: {
                     // 有氧页没有「草稿」概念，最小化等于退出。
                     popOne()
+                },
+                onFinished: { finished in
+                    path.append(ProfileRoute.sessionSummary(finished.id))
                 }
             )
         } else {
@@ -1322,9 +1322,14 @@ private struct TrainingTab: View {
             viewModel: TrainingHomeViewModel(repository: repository),
             onStartTraining: { (state: TodayTrainingState) in
                 switch state {
+                // 注意 `_` 的个数必须与枚举声明里的关联值个数逐一对上：
+                // scheduled 是 4 个、inProgress 是 5 个。少写一个不会报
+                // 「参数个数不对」，而是让整段 switch 推不出类型，
+                // 最终以 `type of expression is ambiguous without a type
+                // annotation` 报在 homeRoot 链尾 —— 根本看不见这里。
                 case .scheduled(let planID, _, _, _):
                     startDraft(forPlanID: planID)
-                case .inProgress(let sessionID, _, _):
+                case .inProgress(let sessionID, _, _, _, _):
                     // App 被终止或用户最小化后重开：草稿还在磁盘上，
                     // 直接回到执行页接着练，不新建也不丢已完成的组。
                     path.append(TrainingRoute.sessionDraft(sessionID))

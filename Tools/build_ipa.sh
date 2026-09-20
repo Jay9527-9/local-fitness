@@ -76,8 +76,24 @@ if ! python3 Tools/audit_body_size.py; then
   echo "   !! 未通过: Tools/audit_body_size.py"
   GATE_FAIL=1
 fi
+# 重构等价性：拆方法时确认逻辑是**纯搬运**（行集合差为空）。
+# 这是唯一能自动证明「拆分没改坏一行」的手段 —— 编译器只会说
+# 「能不能编过」；编得过但逻辑被搬错一行，它一声不吭。
+# 拿不到基准 revision 时脚本自己跳过并**明说**（浅克隆 / 首次提交）。
+if ! python3 Tools/verify_refactor_equivalence.py; then
+  echo "   !! 未通过: Tools/verify_refactor_equivalence.py"
+  GATE_FAIL=1
+fi
+# 枚举关联值个数：`case .x(let a, _, _)` 漏写占位**不会**报「个数不对」，
+# 而是让整段 match 推不出类型，最终以 ambiguous 报在离现场很远的链尾。
+# 2026-09-20 第四次真编译的 `RootView.swift:1358` 就是这个，
+# 前六层全绿：括号平、类型在、调用点齐、规模也够小（homeRoot 仅 1602 字符）。
+if ! python3 Tools/audit_enum_arity.py; then
+  echo "   !! 未通过: Tools/audit_enum_arity.py"
+  GATE_FAIL=1
+fi
 if [ "$GATE_FAIL" -ne 0 ]; then
-  echo "!! 规格审计 / 值语义推演 / 规模审计未通过，已中止。"
+  echo "!! 规格审计 / 值语义推演 / 规模审计 / 枚举个数审计未通过，已中止。"
   exit 1
 fi
 echo "    全部通过"

@@ -28,6 +28,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # 重构等价性检查（Tools/verify_refactor_equivalence.py）要拿 `HEAD~1`
+          # 的旧版本文件来做行集合比对。checkout 默认是浅克隆（depth=1），
+          # 拿不到父提交，脚本会打印「跳过」并以 0 退出 —— 门禁静默失效。
+          # 这个仓库很小，直接取全历史。
+          fetch-depth: 0
 
       - name: Select newest Xcode
         run: |
@@ -91,6 +97,25 @@ jobs:
           # 第三次是 @ViewBuilder 的 profileDestination(for:)（19 个 case 的
           # switch）—— 说明**属性与方法两类都要量**，阈值也别贴着踩雷点取。
           python3 Tools/audit_body_size.py
+
+      - name: Enum associated-value arity
+        run: |
+          # 枚举关联值**个数**匹配审计。`case .inProgress(let a, _, _)`
+          # 漏写占位不报「个数不对」，而是让整段 match 推不出类型，
+          # 最终以 `type of expression is ambiguous without a type annotation`
+          # 报在**离现场很远的**链尾修饰符上（2026-09-20 第四次真编译：
+          # 根因在 RootView 的 onStartTraining，错误却指在 1358 行的
+          # .navigationBarHidden(true)，而 homeRoot 总共才 1602 字符，
+          # 规模层完全看不见）。这是唯一能提前揪出这一类的门禁。
+          python3 Tools/audit_enum_arity.py
+
+      - name: Refactor equivalence
+        run: |
+          # 拆方法时确认逻辑是**纯搬运**（新旧行集合差为空）。
+          # 编译器只会说「能不能编过」；编得过但逻辑被搬错一行，它一声不吭。
+          # 上一步的 Checkout 已用 fetch-depth: 0，这里能拿到 HEAD~1；
+          # 若确实拿不到（首次提交），脚本会明说并跳过。
+          python3 Tools/verify_refactor_equivalence.py
 
       - name: Spec audits and value-layer probes
         run: |
