@@ -292,6 +292,11 @@ def main() -> int:
     hits = scan_patterns(rows)
 
     if "--list" in sys.argv:
+        if not arity or not hits:
+            print("  !! 扫描结果为空（枚举 %d 个 / 匹配点 %d 个）—— "
+                  "匹配规则失效了，不是「代码很干净」。"
+                  % (len(arity), len(hits)))
+            return 1
         print(f"共 {len(arity)} 个带关联值的枚举 case：")
         for (enum_name, case_name), cnt in sorted(arity.items()):
             print(f"  {cnt:>2} 个  {enum_name}.{case_name}")
