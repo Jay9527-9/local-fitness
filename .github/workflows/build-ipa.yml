@@ -4,6 +4,10 @@ name: Build unsigned IPA
 # 手动触发：仓库 Actions → Build unsigned IPA → Run workflow
 
 on:
+  # push 时自动构建。**必须有这一段**：只有 workflow_dispatch 的话，
+  # push 完不会自动跑，得每次手动去 Actions 页面点 Run workflow —— 很容易漏。
+  push:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       configuration:
