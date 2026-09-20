@@ -67,8 +67,15 @@ if ! python3 Tools/audit_call_sites.py; then
   echo "   !! 未通过: Tools/audit_call_sites.py"
   GATE_FAIL=1
 fi
+# 视图体规模：单个 some View 表达式过大 → 类型检查器直接放弃。
+# 2026-09-20 第二次真编译就是被 RootView 的 66 层大括号 body 挡住的，
+# 前五层全绿也看不见（括号平衡、类型存在、调用点齐全、值语义都对）。
+if ! python3 Tools/audit_body_size.py; then
+  echo "   !! 未通过: Tools/audit_body_size.py"
+  GATE_FAIL=1
+fi
 if [ "$GATE_FAIL" -ne 0 ]; then
-  echo "!! 规格审计 / 值语义推演未通过，已中止。"
+  echo "!! 规格审计 / 值语义推演 / 规模审计未通过，已中止。"
   exit 1
 fi
 echo "    全部通过"

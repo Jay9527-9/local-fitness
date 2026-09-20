@@ -80,6 +80,16 @@ jobs:
           # （漏传闭包回调、extra arguments、参数顺序、viewModel 前缀挂错）。
           python3 Tools/audit_call_sites.py
 
+      - name: View body size
+        run: |
+          # SwiftUI 视图体规模审计。单个表达式过大时，Swift 的类型检查器
+          # 不是报"表达式太长"，而是直接放弃：
+          #   error: failed to produce diagnostic for expression
+          # 且只指出 `var body` 那一行，前五层门禁全都看不见（括号平衡、
+          # 类型存在、调用点齐全、值语义都对）。2026-09-20 第二次真编译
+          # 就是被 RootView 的 66 层大括号 body 挡住的。
+          python3 Tools/audit_body_size.py
+
       - name: Spec audits and value-layer probes
         run: |
           # 逐页跑规格审计与纯值层语义推演。本机无 Swift 编译器，
