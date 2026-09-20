@@ -29,35 +29,48 @@
 | 项 | 状态 |
 |---|---|
 | 代码 | 页面 01–15 + 页面 31/51 全部实现 |
-| 本地静态门禁 | **六层**，86 个脚本全绿（见 §三） |
-| git 仓库 | 已推送 GitHub，分支 `main` |
+| 本地静态门禁 | **七层**，85 个脚本全绿（见 §三） |
+| git 仓库 | 已推送 GitHub，分支 `main`，最新 `9ed4586` |
 | 仓库地址 | https://github.com/Jay9527-9/local-fitness |
 | 媒体 | 2648 个文件已提交进仓库 |
-| CI 工作流 | `.github/workflows/build-ipa.yml`，**13 个 step**，`push` 与 `workflow_dispatch` 双触发 |
+| CI 工作流 | `.github/workflows/build-ipa.yml`，**15 个 step**，`push` 与 `workflow_dispatch` 双触发 |
 | 构建脚本 | `Tools/build_ipa.sh`（含完整门禁链） |
 | `.gitattributes` | 已加，媒体标记为 `binary`（防 GIF 被行尾转换损坏） |
+| CI 构建前 13 步 | **全绿**（含 7 层门禁 + 全部规格审计），`Build IPA` 进行中 |
 
 ### ⬜ 待做
 
-1. **等 CI 的 `Build IPA` step 通过** —— 正在迭代编译器错误
+1. **等 CI 的 `Build IPA` step 通过** —— 已在迭代编译器错误；截至 `9ed4586`，
+   构建前的 13 个步骤全部通过，正等真编译结果
 2. **下载 `FitnessApp-unsigned-ipa` 构件**
 3. **在 iOS 16.3.1 设备上用 TrollStore 安装**
 4. **撤销已明文共享的 PAT**：https://github.com/settings/tokens
 
+### 编译器错误收敛轨迹（`Build IPA` step）
+
+| 轮次 | run | 报错 | 结果 |
+|---|---|---|---|
+| 1 | 35497428045 | `failed to produce diagnostic`（TrainingTab.body 66 层） | 拆 body → 冒出 11 个既有错误 |
+| 2 | 35497818607 | `must precede`（CardioSessionView 顺序）+ `ambiguous`（homeRoot） | 修顺序；ambiguous 未解 |
+| 3 | 35498159437 | 前 6 层门禁转绿，L6 与 L7 均通过；`Refactor equivalence` 报红 | 查出是**基准漂移**，非代码事故 |
+| 4 | 35498309347 | **构建前 13 步全绿** | 等 `Build IPA` |
+
 ---
 
-## 三、六层本地门禁（Windows 上没有 Swift 编译器，全靠这个）
+## 三、七层本地门禁（Windows 上没有 Swift 编译器，全靠这个）
 
 ```
 Tools/preflight.py                     L1  iOS 版本 / plist / 工程声明 / 协议一致性 / 资源
-Tools/lint_swift.py                    L2  括号平衡 / 458 个自定义类型 / 未知类型 / 重复定义
+Tools/lint_swift.py                    L2  括号平衡 / 462 个自定义类型 / 未知类型 / 重复定义
 Tools/audit_pageNN.py            ×41   L3  逐页规格审计
-Tools/probe_pageNN_semantics.py  ×46   L4  逐页纯值层语义推演
+Tools/probe_pageNN_semantics.py  ×42   L4  逐页纯值层语义推演
 Tools/audit_call_sites.py              L5  跨文件调用点参数/标签一致性 + viewModel.member 归属
 Tools/audit_body_size.py               L6  SwiftUI 视图体表达式规模（防类型检查器放弃）
+Tools/audit_enum_arity.py              L7  枚举模式绑定的关联值**个数**是否与声明一致
+Tools/verify_refactor_equivalence.py       拆方法后证明逻辑是「纯搬运」（基准钉在 db3df0a）
 ```
 
-六层跑完：
+七层跑完：
 
 ```bash
 cd "C:/Users/yangj/WorkBuddy/2026-09-19-12-55-00/FitnessApp"
@@ -65,12 +78,20 @@ python Tools/preflight.py
 python Tools/lint_swift.py
 python Tools/audit_call_sites.py
 python Tools/audit_body_size.py
+python Tools/audit_enum_arity.py
+python Tools/verify_refactor_equivalence.py
 for f in Tools/audit_page*.py Tools/probe_page*_semantics.py; do python "$f" || echo "FAIL $f"; done
 ```
 
 **第 4 层抓出过 7 个真 bug，第 5 层抓出过 `viewModel.paceSecondsPerKm` 不存在，
-第 6 层抓出过四个 Tab 的超大 `body`。** 报红时**先读源码确认行为，再决定改代码还是改断言** ——
+第 6 层抓出过四个 Tab 的超大 `body`，第 7 层抓出 `case .inProgress` 少绑 2 个 `_`。**
+报红时**先读源码确认行为，再决定改代码还是改断言** ——
 历史上门禁首跑失败里相当一部分是断言自己写歪了。
+
+> **L7 的由来**：`RootView.swift:1358` 的 `type of expression is ambiguous` 看着
+> 像规模问题，实测 `homeRoot` 只有 1602 字符。真因是 `case .inProgress(let id, _, _)`
+> 只绑了 3 个占位，而枚举声明是 5 个关联值 —— **Swift 不会说「个数不对」**，
+> 它报的是整段 match 推不出类型、把错误丢到链尾。前六层结构上都看不见这一类。
 
 ---
 
@@ -305,6 +326,36 @@ Git Bash 里一次粘贴多行会被拆成乱码（实测粘贴三行只剩 `\M`
 ### 10. `/tmp` 在 Windows 不存在
 
 输出重定向到 `/tmp` 会失败，并**掩盖脚本的真实 exit code**。用工作目录下的绝对路径。
+
+### 11. `type of expression is ambiguous` 未必是规模问题
+
+它**会指错地方**，且指向的位置常与根因相距几十行。
+
+实测 `RootView.swift:1358 .navigationBarHidden(true)` 报 ambiguous，
+看着像 `homeRoot` 太大，实测只有 **1602 字符**。真因是 30 行之上：
+
+```swift
+case .inProgress(let sessionID, _, _)      // 只绑了 3 个，声明是 5 个
+```
+
+**`_` 个数与枚举声明不一致时，Swift 不报「个数不对」**，而是整段 match
+推不出类型。修完记得跑 `python Tools/audit_enum_arity.py` 复查全仓同类。
+
+### 12. 对比型门禁的基准不能用 `HEAD~1`
+
+`verify_refactor_equivalence.py` 的基准必须是**绝对 sha**
+（现为 `REFACTOR_BASE = "db3df0a"`，即重构前那个提交）。
+用 `HEAD~1` 会漂：重构提交之上再有提交，`HEAD~1` 就变成已经重构过的版本，
+六处全部误报「旧 1 行 → 新 N 行」，**与「搬运丢行」外观完全一致**。
+
+另：CI 的 Checkout 必须 `with: fetch-depth: 0`，否则脚本拿不到父提交、
+静默跳过而一直"绿" —— **跳过等于没查**。
+
+### 13. 「跳过」和「通过」必须能区分
+
+任何门禁在不具备检查条件时**要打印醒目提示**，不能静默 `return 0`。
+历史上 `verify_refactor_equivalence.py` 因浅克隆静默跳过，伪装成功很久，
+直到加 `fetch-depth: 0` 才暴露。**静默的检查比没有检查更危险**。
 
 ---
 
