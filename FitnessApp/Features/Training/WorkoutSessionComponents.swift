@@ -752,7 +752,7 @@ struct FinishSummaryContent: View {
             if session.isCardio {
                 HStack(spacing: DS.Spacing.tight) {
                     metric(title: "总时长", value: session.elapsedText)
-                    metric(title: "距离", value: FormatterKit.distance(meters: session.distanceMeters))
+                    metric(title: "距离", value: FormatterKit.distance(meters: session.distanceMeters ?? 0))
                 }
                 HStack(spacing: DS.Spacing.tight) {
                     metric(title: "消耗估算", value: FormatterKit.kilocalories(session.kilocalories))
@@ -780,7 +780,7 @@ struct FinishSummaryContent: View {
         var parts: [String] = [session.sessionName]
         parts.append("总时长 \(session.elapsedText)")
         if session.isCardio {
-            parts.append("距离 \(FormatterKit.distance(meters: session.distanceMeters))")
+            parts.append("距离 \(FormatterKit.distance(meters: session.distanceMeters ?? 0))")
             parts.append("消耗估算 \(FormatterKit.kilocalories(session.kilocalories))")
             parts.append("完成 \(session.completedExerciseCount) 个动作")
         } else {

@@ -1236,10 +1236,16 @@ private struct TrainingTab: View {
 
     /// 栈底的训练首页。8 个闭包回调各自只有一两行，拆出来后
     /// TrainingHomeView 的构造不再是 `var body` 表达式的一部分。
+    ///
+    /// **闭包参数显式标注类型**：`onStartTraining` 里要对枚举做 `switch`，
+    /// 若靠推断（`{ state in ... }`）编译器要先反推 `state` 的类型才能解析
+    /// 各个 `case`，而 `TrainingHomeView` 的构造又有 8 个闭包 —— 推断规模
+    /// 叠加后会报 `type of expression is ambiguous without a type annotation`。
+    /// 写上 `(state: TodayTrainingState)` 就给了锚点，问题消失。
     private var homeRoot: some View {
         TrainingHomeView(
             viewModel: TrainingHomeViewModel(repository: repository),
-            onStartTraining: { state in
+            onStartTraining: { (state: TodayTrainingState) in
                 switch state {
                 case .scheduled(let planID, _, _, _):
                     startDraft(forPlanID: planID)
@@ -1253,10 +1259,10 @@ private struct TrainingTab: View {
             },
             onNewStrength: { startFreeStrengthDraft() },
             onNewCardio: { path.append(TrainingRoute.newCardio) },
-            onOpenPlan: { plan in
+            onOpenPlan: { (plan: Plan) in
                 path.append(TrainingRoute.planDetail(plan.id))
             },
-            onOpenSession: { session in
+            onOpenSession: { (session: WorkoutSession) in
                 // 首页「最近训练」点进历史训练详情（页面 09）。
                 // 规格里页面 09 的入口有两个：历史日历 / 训练列表，
                 // 首页最近训练就是后者的一个具体位置。
@@ -1264,7 +1270,7 @@ private struct TrainingTab: View {
             },
             onOpenCalendar: { /* 待接入日历 / 计划 */ },
             onOpenMore: { /* 待接入更多设置 */ },
-            onResumeSession: { session in
+            onResumeSession: { (session: WorkoutSession) in
                 path.append(TrainingRoute.sessionDraft(session.id))
             },
             onOpenRecovery: {
@@ -1342,7 +1348,7 @@ private struct TrainingTab: View {
         case .recovery:
             DataRecoveryView(
                 repository: repository,
-                onBack: { popOne() }
+                onBack: { popExerciseOne() }
             )
         }
     }
@@ -1367,7 +1373,9 @@ private struct TrainingTab: View {
             },
             onRemove: {
                 try? repository.removePlanExercise(entry.id, fromPlan: planID)
-                popOne()
+                // 训练 Tab 里没有 `popOne`，只有 `popExerciseOne`（两者行为一致，
+                // 区别只在于名字记录了这个 Tab 的用法来历）。别从别的 Tab 抄。
+                popExerciseOne()
             },
             onOpenProgression: { _ in
                 configPlanID = planID
@@ -1445,7 +1453,7 @@ private struct TrainingTab: View {
                 sessionID: sessionID,
                 onMinimize: {
                     // 有氧页没有「草稿」概念，最小化等于退出。
-                    popOne()
+                    popExerciseOne()
                 },
                 onFinished: { finished in
                     path.append(TrainingRoute.sessionSummary(finished.id))
@@ -1966,6 +1974,24 @@ private struct ExercisesTab: View {
     private func exercisePopToRoot() {
         path = NavigationPath()
         viewModel.reloadAfterExternalChange()
+    }
+
+    /// 返回上一页。只弹一层，不清空整栈。
+    ///
+    /// 每个 Tab 各自持有一份，**不要跨 Tab 借用**：`private` 方法的作用域是
+    /// 类型本身，`TrainingTab` 里同名的那个在这里不可见。
+    /// （2026-09-20：这四个 Tab 的 `body` 拆开之前，编译器先被巨型表达式
+    /// 挡住、没来得及报这些「方法不存在」，拆完才暴露出来。）
+    private func popExerciseOne() {
+        guard !path.isEmpty else { return }
+        path.removeLast()
+    }
+
+    /// 趋势页标题的兜底名。查不到（动作已删除）时直接用 id：
+    /// 页面 11 的三级兜底最后一档是「未知动作」，比一串 uuid 好看，
+    /// 但这里传 id 能让趋势页知道「上游也没查到」，走自己的兜底链。
+    private func lookupExerciseName(_ exerciseID: String) -> String {
+        (try? repository.fetchExercises(ids: [exerciseID]).first)?.displayName ?? exerciseID
     }
 }
 

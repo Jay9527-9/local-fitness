@@ -32,6 +32,9 @@ final class CardioSessionViewModel: ObservableObject {
     var distanceMeters: Double { session?.distanceMeters ?? 0 }
     var kilocalories: Double { session?.consumedKilocalories ?? 0 }
     var note: String { session?.note ?? "" }
+    /// 用户手动录入的配速（秒/公里）。nil 表示未填。
+    /// 注意与 `averagePaceSecondsPerKm` 区分：那个是「距离 ÷ 时长」算出来的平均配速。
+    var paceSecondsPerKm: Double? { session?.paceSecondsPerKm }
     var segments: [WorkoutSegment] { session?.segments ?? [] }
 
     var goal: (kind: CardioGoalKind, value: Double)? {
@@ -187,16 +190,23 @@ struct CardioSessionView: View {
             recordDataContent
         }
         .bottomDrawer(isPresented: $showSegmentSheet, height: 460, title: "添加分段") {
-            SegmentEntrySheet(onSave: { segment in
-                viewModel.addSegment(segment)
-                showSegmentSheet = false
-            })
+            SegmentEntrySheet(
+                initialDistance: nil,
+                onSave: { segment in
+                    viewModel.addSegment(segment)
+                    showSegmentSheet = false
+                }
+            )
         }
         .sheet(item: $editingSegment) { segment in
-            SegmentEntrySheet(segment: segment, onSave: { updated in
-                viewModel.updateSegment(updated)
-                editingSegment = nil
-            })
+            SegmentEntrySheet(
+                segment: segment,
+                initialDistance: segment.distanceMeters,
+                onSave: { updated in
+                    viewModel.updateSegment(updated)
+                    editingSegment = nil
+                }
+            )
         }
         .bottomDrawer(isPresented: $showFinishConfirm, height: 420, title: "结束有氧训练") {
             finishConfirmContent
@@ -496,8 +506,9 @@ struct CardioSessionView: View {
 
     private var recordDataContent: some View {
         RecordDataContent(
-            initialDistance: viewModel.distanceMeters,
+            initialDistanceMeters: viewModel.distanceMeters,
             initialKilocalories: viewModel.kilocalories,
+            initialPaceSecondsPerKm: viewModel.paceSecondsPerKm,
             initialNote: viewModel.note,
             onSave: { distance, kcal, pace, note in
                 viewModel.recordData(
@@ -552,8 +563,9 @@ struct CardioSessionView: View {
 
 private struct RecordDataContent: View {
 
-    let initialDistance: Double
+    let initialDistanceMeters: Double
     let initialKilocalories: Double
+    let initialPaceSecondsPerKm: Double?
     let initialNote: String
     let onSave: (Double?, Double?, Double?, String?) -> Void
 
@@ -563,18 +575,20 @@ private struct RecordDataContent: View {
     @State private var noteText: String
 
     init(
-        initialDistance: Double,
+        initialDistanceMeters: Double,
         initialKilocalories: Double,
+        initialPaceSecondsPerKm: Double?,
         initialNote: String,
         onSave: @escaping (Double?, Double?, Double?, String?) -> Void
     ) {
-        self.initialDistance = initialDistance
+        self.initialDistanceMeters = initialDistanceMeters
         self.initialKilocalories = initialKilocalories
+        self.initialPaceSecondsPerKm = initialPaceSecondsPerKm
         self.initialNote = initialNote
         self.onSave = onSave
-        _distanceText = State(initialValue: initialDistance > 0 ? Self.num(initialDistance) : "")
+        _distanceText = State(initialValue: initialDistanceMeters > 0 ? Self.num(initialDistanceMeters) : "")
         _kcalText = State(initialValue: initialKilocalories > 0 ? Self.num(initialKilocalories) : "")
-        _paceText = State(initialValue: "")
+        _paceText = State(initialValue: Self.paceText(initialPaceSecondsPerKm))
         _noteText = State(initialValue: initialNote)
     }
 
@@ -586,8 +600,11 @@ private struct RecordDataContent: View {
             field("备注", $noteText, "")
 
             PrimaryButton(title: "保存") {
+                // 面板填的是公里，模型存的是米。空串与「0」都要落成 nil，
+                // 否则取消填写后旧值会被 0 覆盖。
+                let km = Double(distanceText.trimmingCharacters(in: .whitespaces))
                 onSave(
-                    Double(distanceText.trimmingCharacters(in: .whitespaces)),
+                    km.flatMap { $0 > 0 ? $0 * 1000 : nil },
                     Double(kcalText.trimmingCharacters(in: .whitespaces)),
                     Double(paceText.trimmingCharacters(in: .whitespaces)),
                     noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -596,6 +613,12 @@ private struct RecordDataContent: View {
             }
         }
         .padding(DS.Spacing.card)
+    }
+
+    /// 秒/公里 → 输入框文本。缺值给空串，不显示 0。
+    private static func paceText(_ seconds: Double?) -> String {
+        guard let seconds, seconds > 0 else { return "" }
+        return String(Int(seconds.rounded()))
     }
 
     private func field(_ title: String, _ text: Binding<String>, _ unit: String) -> some View {
@@ -638,6 +661,8 @@ private struct RecordDataContent: View {
 private struct SegmentEntrySheet: View {
 
     let segment: WorkoutSegment?
+    /// 新分段时由「训练累计距离」带进来的缺省值（米）。编辑时传 nil，以 `segment` 为准。
+    let initialDistance: Double?
     let onSave: (WorkoutSegment) -> Void
 
     @State private var durationText: String
@@ -645,11 +670,18 @@ private struct SegmentEntrySheet: View {
     @State private var paceText: String
     @State private var noteText: String
 
-    init(segment: WorkoutSegment? = nil, onSave: @escaping (WorkoutSegment) -> Void) {
+    init(
+        segment: WorkoutSegment? = nil,
+        initialDistance: Double? = nil,
+        onSave: @escaping (WorkoutSegment) -> Void
+    ) {
         self.segment = segment
+        self.initialDistance = initialDistance
         self.onSave = onSave
+        // 编辑已有分段时，以分段自身的值为准；新建时若没传就留空。
+        let meters = segment?.distanceMeters ?? initialDistance
         _durationText = State(initialValue: segment.map { $0.durationSeconds > 0 ? "\($0.durationSeconds)" : "" } ?? "")
-        _distanceText = State(initialValue: segment?.distanceMeters.map { $0 > 0 ? String(format: "%.2f", $0 / 1000) : "" } ?? "")
+        _distanceText = State(initialValue: meters.map { $0 > 0 ? String(format: "%.2f", $0 / 1000) : "" } ?? "")
         _paceText = State(initialValue: segment?.paceSecondsPerKm.map { $0 > 0 ? "\(Int($0))" : "" } ?? "")
         _noteText = State(initialValue: segment?.note ?? "")
     }
@@ -677,11 +709,14 @@ private struct SegmentEntrySheet: View {
 
             PrimaryButton(title: "保存分段") {
                 let trimmed = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
+                // 输入的是公里，模型存的是米。空串与「0」都落成 nil，
+                // 避免把「没填」写成「0 米」而与「未记录」混淆。
+                let km = Double(trimmed(distanceText))
                 onSave(
                     WorkoutSegment(
                         id: segment?.id ?? UUID(),
                         durationSeconds: Int(trimmed(durationText)) ?? 0,
-                        distanceMeters: Double(trimmed(distanceText)).map { $0 * 1000 },
+                        distanceMeters: km.flatMap { $0 > 0 ? $0 * 1000 : nil },
                         paceSecondsPerKm: Double(trimmed(paceText)),
                         note: trimmed(noteText).isEmpty ? nil : trimmed(noteText)
                     )

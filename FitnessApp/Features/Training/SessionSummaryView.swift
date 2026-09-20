@@ -182,7 +182,7 @@ struct SessionSummaryView: View {
                 unit: "/ 公里",
                 literalText: FormatterKit.pace(
                     seconds: session.durationSeconds,
-                    meters: session.distanceMeters
+                    meters: session.distanceMeters ?? 0
                 ),
                 isAccent: true
             ))
@@ -211,10 +211,10 @@ struct SessionSummaryView: View {
         parts.append("训练时长 \(FormatterKit.duration(seconds: session.durationSeconds))")
 
         if session.kind == .cardio {
-            parts.append("距离 \(FormatterKit.distance(meters: session.distanceMeters))")
+            parts.append("距离 \(FormatterKit.distance(meters: session.distanceMeters ?? 0))")
             let pace = FormatterKit.pace(
                 seconds: session.durationSeconds,
-                meters: session.distanceMeters
+                meters: session.distanceMeters ?? 0
             )
             parts.append(pace == "—" ? "平均配速暂无数据" : "平均配速每公里 \(pace)")
             parts.append("消耗估算 \(FormatterKit.kilocalories(session.kilocalories))")

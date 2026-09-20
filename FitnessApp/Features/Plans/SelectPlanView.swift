@@ -184,8 +184,8 @@ struct SelectPlanView: View {
                 get: { conflictPlan != nil },
                 set: { if !$0 { conflictPlan = nil } }
             ),
-            presenting: conflictPlan,
-            titleVisibility: .visible
+            titleVisibility: .visible,
+            presenting: conflictPlan
         ) { plan in
             Button("新增一份") { onPick(plan, false); conflictPlan = nil }
             Button("替换原配置") { onPick(plan, true); conflictPlan = nil }
