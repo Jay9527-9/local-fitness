@@ -628,7 +628,9 @@ private struct PlanActionDrawer: View {
         onOpenPlan: { _ in },
         onOpenSession: { _ in },
         onOpenCalendar: {},
-        onOpenMore: {}
+        onOpenMore: {},
+        onResumeSession: { _ in },
+        onOpenRecovery: {}
     )
     .preferredColorScheme(.dark)
 }
@@ -642,7 +644,9 @@ private struct PlanActionDrawer: View {
         onOpenPlan: { _ in },
         onOpenSession: { _ in },
         onOpenCalendar: {},
-        onOpenMore: {}
+        onOpenMore: {},
+        onResumeSession: { _ in },
+        onOpenRecovery: {}
     )
     .preferredColorScheme(.dark)
 }

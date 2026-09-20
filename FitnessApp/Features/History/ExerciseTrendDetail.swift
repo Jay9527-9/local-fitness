@@ -336,6 +336,24 @@ struct ExerciseRecentRecord: Identifiable, Equatable {
         return "\(weightText) \(unit.shortTitle) × \(bestReps)"
     }
 
+    /// 容量文案，如「1.2 t」/「960 kg」。
+    ///
+    /// 与 `bestSetText` 一样只转显示不改数据：`volume` 始终是 kg 原始值，
+    /// 切到磅时按 `unit` 换算后再格式化。容量经常上万，超过 1000 时
+    /// 折成「t」并保留 1 位小数，避免行尾数字挤成一团。
+    func volumeText(unit: TrendWeightUnit) -> String {
+        let converted = unit.displayValue(fromKilograms: volume)
+        guard converted.isFinite else { return "0 \(unit.shortTitle)" }
+        if converted >= 1000 {
+            let tonnes = (converted / 1000 * 10).rounded() / 10
+            let text = tonnes == tonnes.rounded()
+                ? String(Int(tonnes))
+                : String(format: "%.1f", tonnes)
+            return "\(text) t"
+        }
+        return "\(TrendNumberFormat.weight(converted)) \(unit.shortTitle)"
+    }
+
     var accessibilityLabel: String {
         var parts = [FormatterKit.monthDaySlash(date)]
         parts.append(sessionName)

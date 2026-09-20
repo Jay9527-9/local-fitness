@@ -144,8 +144,8 @@ struct OnboardingView: View {
                 )
                 .accessibilityLabel("昵称，可选")
 
-            unitRow("重量单位", options: BodyWeightUnit.allCases, selection: $weightUnit)
-            unitRow("长度单位", options: BodyLengthUnit.allCases, selection: $lengthUnit)
+            unitRow("重量单位", options: BodyWeightUnit.self, selection: $weightUnit)
+            unitRow("长度单位", options: BodyLengthUnit.self, selection: $lengthUnit)
         }
     }
 

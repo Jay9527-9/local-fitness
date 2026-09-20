@@ -152,7 +152,7 @@ final class PlanDetailViewModel: ObservableObject {
     /// 上次训练日期
     var lastTrainedText: String {
         guard let lastUsedAt = plan?.lastUsedAt else { return "还没有训练记录" }
-        return FormatterKit.shortDate.string(from: lastUsedAt)
+        return FormatterKit.shortDate(lastUsedAt)
     }
 
     /// 概览卡上的四项指标

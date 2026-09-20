@@ -60,6 +60,13 @@ for f in Tools/probe_page*_semantics.py; do
     GATE_FAIL=1
   fi
 done
+# 调用点一致性：声明在 A 文件、调用在 B 文件的参数个数/标签错误。
+# 上面两层都是单文件内的检查，看不见这类问题 —— 2026-09-20 第一次真编译
+# 报出的 14 个错误里有 5 个是这一层才能发现的。
+if ! python3 Tools/audit_call_sites.py; then
+  echo "   !! 未通过: Tools/audit_call_sites.py"
+  GATE_FAIL=1
+fi
 if [ "$GATE_FAIL" -ne 0 ]; then
   echo "!! 规格审计 / 值语义推演未通过，已中止。"
   exit 1

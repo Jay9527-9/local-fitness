@@ -27,7 +27,9 @@ struct PlanExerciseConfigView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft: ExerciseDraft
-    @State private var noteFocused = false
+    /// 备注输入框的焦点。`.focused(_:)` 收的是 `FocusState<Bool>.Binding`，
+    /// 普通的 `@State private var x = false` 传进去是 `Binding<Bool>`，类型不匹配。
+    @FocusState private var noteFocused: Bool
 
     init(
         entry: PlanExercise,
@@ -532,8 +534,11 @@ private extension Binding where Value == Int {
                     // 固定次数：把上限对齐到下限
                     upper.wrappedValue = wrappedValue
                 } else {
-                    // 恢复区间：给上限留出至少一档空间
-                    upper.wrappedValue = min(50, wrappedValue + step)
+                    // 恢复区间：给上限留出至少一档空间。
+                    // 必须写 `Swift.min`：本扩展在 `Binding` 上，而 `Binding`
+                    // 自身满足 `Comparable` 时会有实例方法 `min`，不加限定
+                    // 会被解析成实例方法而不是全局函数。
+                    upper.wrappedValue = Swift.min(50, wrappedValue + step)
                 }
             }
         )

@@ -222,7 +222,7 @@ struct FavoriteExercisesView: View {
                 ForEach(viewModel.muscleCategories, id: \.self) { category in
                     chip(
                         title: category,
-                        count: viewModel.muscleCounts[category],
+                        count: muscleCounts[category],
                         isSelected: viewModel.muscleCategory == category
                     ) {
                         viewModel.setMuscleCategory(category)

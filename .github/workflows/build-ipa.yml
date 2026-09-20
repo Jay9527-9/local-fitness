@@ -68,6 +68,14 @@ jobs:
       - name: Swift structure lint
         run: python3 Tools/lint_swift.py
 
+      - name: Call-site consistency
+        run: |
+          # 声明在一个文件、调用在另一个文件的参数个数 / 标签一致性。
+          # 前两层都是单文件内的文本检查，看不见这类问题：2026-09-20
+          # 第一次真编译报出的 14 个错误里，有 5 个只有这一层能提前发现
+          # （漏传闭包回调、extra arguments、参数顺序、viewModel 前缀挂错）。
+          python3 Tools/audit_call_sites.py
+
       - name: Spec audits and value-layer probes
         run: |
           # 逐页跑规格审计与纯值层语义推演。本机无 Swift 编译器，

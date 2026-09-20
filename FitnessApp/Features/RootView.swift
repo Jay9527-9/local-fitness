@@ -1280,44 +1280,13 @@ private struct TrainingTab: View {
             }
 
         case .sessionDraft(let sessionID):
-            if isCardio(sessionID: sessionID) {
-                CardioSessionView(
-                    repository: repository,
-                    sessionID: sessionID,
-                    onMinimize: {
-                        if !path.isEmpty { path.removeLast() }
-                    },
-                    onFinished: { finished in
-                        path.append(TrainingRoute.sessionSummary(finished.id))
-                    }
-                )
-            } else {
-                WorkoutSessionView(
-                    repository: repository,
-                    sessionID: sessionID,
-                    onFinished: { finished in
-                        path.append(TrainingRoute.sessionSummary(finished.id))
-                    },
-                    onMinimize: {
-                        // 最小化只是退出页面，草稿实时保存在磁盘上，
-                        // 返回首页后「继续训练」能接着进入。
-                        if !path.isEmpty { path.removeLast() }
-                    },
-                    onEditConfig: { entry in
-                        guard let planID = draftPlanID(forSessionID: sessionID) else { return }
-                        path.append(TrainingRoute.exerciseConfig(planID: planID, entry: entry))
-                    },
-                    onRequestReplace: { card in
-                        pickerContext = ExercisePickerContext(
-                            planID: nil,
-                            replacingEntryID: nil,
-                            sessionID: sessionID,
-                            replacingExerciseID: card.exerciseID
-                        )
-                        showExercisePicker = true
-                    }
-                )
-            }
+            // 力量 / 有氧两套执行页分派给独立方法。
+            //
+            // 内联在这里会让 `destination(for:)` 单个表达式里同时出现
+            // 6 个闭包 + 泛型视图 + 分支，Swift 的类型检查器会直接放弃
+            // （`failed to produce diagnostic for expression`）。
+            // 拆出去后每个方法只负责一个页面，检查规模回到正常水平。
+            sessionDraftView(sessionID: sessionID)
 
         case .sessionSummary(let sessionID):
             sessionSummaryView(sessionID: sessionID)
@@ -1371,6 +1340,56 @@ private struct TrainingTab: View {
         (try? repository.fetchSession(id: sessionID))?.kind == .cardio
     }
 
+    /// 训练执行页。力量与有氧是两套完全独立的视图，按草稿的 `kind` 分派。
+    ///
+    /// 单独成方法而不是内联在 `destination(for:)`：这个分支有 6 个闭包回调，
+    /// 内联会让整个 `switch` 的类型检查规模爆炸，编译器会以
+    /// `failed to produce diagnostic for expression` 失败（不是代码错）。
+    @ViewBuilder
+    private func sessionDraftView(sessionID: UUID) -> some View {
+        if isCardio(sessionID: sessionID) {
+            CardioSessionView(
+                repository: repository,
+                sessionID: sessionID,
+                onMinimize: {
+                    // 有氧页没有「草稿」概念，最小化等于退出。
+                    popOne()
+                },
+                onFinished: { finished in
+                    path.append(TrainingRoute.sessionSummary(finished.id))
+                }
+            )
+        } else {
+            WorkoutSessionView(
+                repository: repository,
+                sessionID: sessionID,
+                onFinished: { finished in
+                    path.append(TrainingRoute.sessionSummary(finished.id))
+                },
+                onMinimize: {
+                    // 最小化只是退出页面，草稿实时保存在磁盘上，
+                    // 返回首页后「继续训练」能接着进入。
+                    popToRoot()
+                },
+                onEditConfig: { entry in
+                    guard let planID = draftPlanID(forSessionID: sessionID) else { return }
+                    path.append(TrainingRoute.exerciseConfig(planID: planID, entry: entry))
+                },
+                onRequestReplace: { card in
+                    // 替换进行中训练的动作：`planID` 留空是为了让挑选结果
+                    // 走「替换训练」那条分支，而不是去改计划。
+                    pickerContext = ExercisePickerContext(
+                        planID: nil,
+                        replacingEntryID: nil,
+                        sessionID: sessionID,
+                        replacingExerciseID: card.exerciseID
+                    )
+                    showExercisePicker = true
+                }
+            )
+        }
+    }
+
     /// 训练总结页：结束时展示结果，数据全部来自本地记录。
     private func sessionSummaryView(sessionID: UUID) -> some View {
         if isCardio(sessionID: sessionID) {
@@ -1379,11 +1398,11 @@ private struct TrainingTab: View {
                     repository: repository,
                     sessionID: sessionID,
                     onDone: {
-                        path = NavigationPath()
+                        popToRoot()
                         homeReloadID = UUID()
                     },
                     onOpenHistory: {
-                        path = NavigationPath()
+                        popToRoot()
                         homeReloadID = UUID()
                         onOpenHistory(sessionID)
                     }
@@ -1397,13 +1416,13 @@ private struct TrainingTab: View {
                 onDone: {
                     // 回到训练首页。总结页通常压在 计划详情 / 草稿 之上，
                     // 一次清空比逐层 removeLast 更能保证落回首页。
-                    path = NavigationPath()
+                    popToRoot()
                     // 首页的「最近训练」需要重新读盘才能看到刚结束的这次
                     homeReloadID = UUID()
                 },
                 onOpenHistory: {
                     // 「查看历史记录」要跨 Tab：清空训练栈后交给 RootView 切 Tab 定位。
-                    path = NavigationPath()
+                    popToRoot()
                     homeReloadID = UUID()
                     onOpenHistory(sessionID)
                 }
@@ -1586,6 +1605,15 @@ private struct TrainingTab: View {
 
     private func popExerciseOne() {
         if !path.isEmpty { path.removeLast() }
+    }
+
+    /// 滚回当前 Tab 的栈底。
+    ///
+    /// 训练 Tab 里 `sessionSummaryView` 走的是 `path = NavigationPath()`，
+    /// 而不是 `path.removeLast()`：总结页通常压在「计划详情 / 草稿」之上，
+    /// 一次清空比逐层弹出更稳，也不会在中间层触发多余的 onAppear 读盘。
+    private func popToRoot() {
+        path = NavigationPath()
     }
 
     /// 趋势页标题的兜底名。查不到（动作已删除）时直接用 id：

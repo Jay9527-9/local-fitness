@@ -306,7 +306,14 @@ item(G, "本地时区自然日筛选（用 Calendar，不用秒数除法）",
 # ============ 十一、无障碍与动态字体 ============
 G = "十一、无障碍与动态字体"
 item(G, "日历日期朗读含日期",
-     in_file("Features/History/HistoryCalendar.swift", r"accessibilityLabel\(isSelected:"))
+     # 只要求「存在这个方法且第一段是日期」。
+     # 早先写成字面量 `accessibilityLabel(isSelected:`，把「参数写在同一行」
+     # 这个排版细节也当成了规格 —— 签名拆行改写会让它误报。
+     # 真正要保的是 `parts` 的首元素来自 formatter(day)。
+     in_file("Features/History/HistoryCalendar.swift",
+             r"func accessibilityLabel\(\s*isSelected:") and
+     in_file("Features/History/HistoryCalendar.swift",
+             r"var parts: \[String\] = \[formatter\(day\)\]"))
 item(G, "朗读含训练数量",
      in_file("Features/History/HistoryCalendar.swift", r"次训练"))
 item(G, "朗读含选中状态",

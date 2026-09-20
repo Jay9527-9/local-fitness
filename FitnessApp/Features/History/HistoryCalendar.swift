@@ -176,8 +176,17 @@ struct HistoryDayEntry: Equatable {
     }
 
     /// 日历日期格的无障碍标签：日期 + 训练数量 + 选中状态
-    func accessibilityLabel(isSelected: Bool, isToday: Bool, formatter: DateFormatter) -> String {
-        var parts: [String] = [formatter.string(from: day)]
+    ///
+    /// `formatter` 收的是闭包而不是 `DateFormatter`：调用侧传的是
+    /// `FormatterKit.monthDayWeekday` 这样的静态方法，直接传函数引用比
+    /// 在每次 body 求值时 new 一个 `DateFormatter` 便宜得多，也不会让
+    /// 视图层为了造格式化器而持有可变状态。
+    func accessibilityLabel(
+        isSelected: Bool,
+        isToday: Bool,
+        formatter: (Date) -> String
+    ) -> String {
+        var parts: [String] = [formatter(day)]
         if isToday { parts.append("今天") }
         if sessions.isEmpty {
             if isRestDay {

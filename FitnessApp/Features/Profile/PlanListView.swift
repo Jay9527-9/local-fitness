@@ -255,8 +255,8 @@ struct PlanListView: View {
                 get: { menuPlan != nil },
                 set: { if !$0 { menuPlan = nil } }
             ),
-            presenting: menuPlan,
-            titleVisibility: .visible
+            titleVisibility: .visible,
+            presenting: menuPlan
         ) { plan in
             Button("开始训练") { onStartTraining(plan) }
             Button("编辑") { onOpenPlan(plan) }

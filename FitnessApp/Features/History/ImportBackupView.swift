@@ -336,10 +336,15 @@ struct ImportBackupView: View {
         }
         .sheet(isPresented: $showConflictSheet) {
             if let backup = viewModel.backup {
+                // `ImportConflictView` 只吃 view model，构造交给调用方：
+                // 冲突分析需要在 sheet 出现的瞬间就拿到本机数据做对比，
+                // 用 `.task` 在子视图里异步建 VM 会先闪一帧空统计。
                 ImportConflictView(
-                    backup: backup,
-                    repository: viewModel.repository,
-                    initialStrategy: viewModel.importStrategy,
+                    viewModel: ImportConflictViewModel(
+                        backup: backup,
+                        repository: viewModel.repository,
+                        initialStrategy: viewModel.importStrategy
+                    ),
                     onConfirm: { strategy in
                         viewModel.importStrategy = strategy
                     }
