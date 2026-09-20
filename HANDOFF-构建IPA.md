@@ -29,21 +29,20 @@
 | 项 | 状态 |
 |---|---|
 | 代码 | 页面 01–15 + 页面 31/51 全部实现 |
-| 本地静态门禁 | **七层**，85 个脚本全绿（见 §三） |
-| git 仓库 | 已推送 GitHub，分支 `main`，最新 `9ed4586` |
+| 本地静态门禁 | **九层**，86 个脚本全绿（见 §三） |
+| git 仓库 | 已推送 GitHub，分支 `main`，最新 `ea15a7e` |
 | 仓库地址 | https://github.com/Jay9527-9/local-fitness |
 | 媒体 | 2648 个文件已提交进仓库 |
-| CI 工作流 | `.github/workflows/build-ipa.yml`，**15 个 step**，`push` 与 `workflow_dispatch` 双触发 |
+| CI 工作流 | `.github/workflows/build-ipa.yml`，**16 个 step**，`push` 与 `workflow_dispatch` 双触发 |
 | 构建脚本 | `Tools/build_ipa.sh`（含完整门禁链） |
 | `.gitattributes` | 已加，媒体标记为 `binary`（防 GIF 被行尾转换损坏） |
-| CI 构建前 13 步 | **全绿**（含 7 层门禁 + 全部规格审计），`Build IPA` 进行中 |
+| CI 构建前步骤 | **全绿**（含 8 层门禁 + 全部规格审计），`Build IPA` 进行中 |
 
 ### ⬜ 待做
 
-1. **等 CI 的 `Build IPA` step 通过** —— 已在迭代编译器错误；截至 `9ed4586`，
-   构建前的 13 个步骤全部通过，正等真编译结果
-2. **下载 `FitnessApp-unsigned-ipa` 构件**
-3. **在 iOS 16.3.1 设备上用 TrollStore 安装**
+1. **等 CI 的 `Build IPA` step 通过**（`ea15a7e` 这一轮，含动作库性能修复）
+2. **下载 `FitnessApp-unsigned-ipa` 构件**，按 §六之二逐项校验
+3. **在 iOS 16.3.1 设备上用 TrollStore 安装**，确认动作库三个问题已消除
 4. **撤销已明文共享的 PAT**：https://github.com/settings/tokens
 
 ### 编译器错误收敛轨迹（`Build IPA` step）
@@ -57,20 +56,21 @@
 
 ---
 
-## 三、七层本地门禁（Windows 上没有 Swift 编译器，全靠这个）
+## 三、九层本地门禁（Windows 上没有 Swift 编译器，全靠这个）
 
 ```
 Tools/preflight.py                     L1  iOS 版本 / plist / 工程声明 / 协议一致性 / 资源
-Tools/lint_swift.py                    L2  括号平衡 / 462 个自定义类型 / 未知类型 / 重复定义
+Tools/lint_swift.py                    L2  括号平衡 / 自定义类型 / 未知类型 / 重复定义
 Tools/audit_pageNN.py            ×41   L3  逐页规格审计
 Tools/probe_pageNN_semantics.py  ×42   L4  逐页纯值层语义推演
 Tools/audit_call_sites.py              L5  跨文件调用点参数/标签一致性 + viewModel.member 归属
 Tools/audit_body_size.py               L6  SwiftUI 视图体表达式规模（防类型检查器放弃）
 Tools/audit_enum_arity.py              L7  枚举模式绑定的关联值**个数**是否与声明一致
+Tools/audit_exercise_library_perf.py   L8  动作库性能与布局回归（见下）
 Tools/verify_refactor_equivalence.py       拆方法后证明逻辑是「纯搬运」（基准钉在 db3df0a）
 ```
 
-七层跑完：
+九层跑完：
 
 ```bash
 cd "C:/Users/yangj/WorkBuddy/2026-09-19-12-55-00/FitnessApp"
@@ -79,6 +79,7 @@ python Tools/lint_swift.py
 python Tools/audit_call_sites.py
 python Tools/audit_body_size.py
 python Tools/audit_enum_arity.py
+python Tools/audit_exercise_library_perf.py
 python Tools/verify_refactor_equivalence.py
 for f in Tools/audit_page*.py Tools/probe_page*_semantics.py; do python "$f" || echo "FAIL $f"; done
 ```
@@ -92,6 +93,15 @@ for f in Tools/audit_page*.py Tools/probe_page*_semantics.py; do python "$f" || 
 > 像规模问题，实测 `homeRoot` 只有 1602 字符。真因是 `case .inProgress(let id, _, _)`
 > 只绑了 3 个占位，而枚举声明是 5 个关联值 —— **Swift 不会说「个数不对」**，
 > 它报的是整段 match 推不出类型、把错误丢到链尾。前六层结构上都看不见这一类。
+
+> **L8 的由来**：实机报「动作库加载慢、卡顿、底栏挡住界面」，四类根因分别是
+> ①七个派生值写成计算属性 → 每次 `body` 求值全量重算 1324 条；
+> ②1324 行被普通 `VStack` 包住 → `LazyVStack` 的惰性只对直接子视图生效，等于失效；
+> ③缩略图 / GIF 在 `body` 内同步读盘解码，无缓存；
+> ④动作库自己又叠了一层与外层 Tab 栏同向的 `safeAreaInset(.bottom)`，空分支也占位。
+> **这四类全都「语法对、类型对、调用点齐、视图体也不大」**，
+> 前七层从设计上就看不见 —— 它们不是正确性问题，是**性能与布局**问题。
+> 加这一层是因为：能编过 ≠ 能用。
 
 ---
 
