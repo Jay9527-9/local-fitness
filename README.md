@@ -87,8 +87,22 @@
 工作流文件：`.github/workflows/build-ipa.yml`
 - runner：`macos-14`
 - 自动安装 `xcodegen` 与 `ldid`
-- 构建前跑 `Tools/preflight.py` 做门禁检查
+- **构建前依次跑完整门禁链**：媒体完整性 → `preflight.py` → `lint_swift.py` →
+  全部 `audit_page*.py` 与 `probe_page*_semantics.py`，任何一项不通过即中止，不会产出坏包
 - 产出未签名 IPA 并上传为 Artifact
+
+**本地仓库已经初始化好了**（分支 `main`，2841 个文件，含 131 MB 媒体）。
+只剩「建远程仓库 + push」这一步，在本机 `FitnessApp` 目录下执行：
+
+```bash
+git remote add origin https://github.com/<你的用户名>/<仓库名>.git
+git push -u origin main
+```
+
+> 首次 push 约 131 MB（媒体占绝大部分）。若不想把媒体提交进仓库，
+> 取消 `.gitignore` 里 `Resources/ExerciseMedia/{images,videos}/` 两行的注释，
+> 工作流的 "Prepare media assets" 步骤会自动下载补齐（要求总量 < 2648 时才触发）。
+> `.gitattributes` 已把这些文件标为 `binary`，不会被行尾转换损坏。
 
 ### 路径 B：本机 Mac
 
@@ -99,7 +113,8 @@ chmod +x Tools/*.sh
 # 产物：FitnessApp-unsigned.ipa
 ```
 
-`build_ipa.sh` 会先跑 `Tools/preflight.py`，任何一项不通过就中止，不会产出坏包。
+`build_ipa.sh` 会先依次跑 `Tools/preflight.py`、`Tools/lint_swift.py`、
+以及全部按页留档的审计与推演脚本，任何一项不通过就中止，不会产出坏包。
 预检可以单独跑：
 
 ```bash
