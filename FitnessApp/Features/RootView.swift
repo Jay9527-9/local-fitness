@@ -265,6 +265,59 @@ private struct ProfileTab: View {
     }
 
     var body: some View {
+        // 与 TrainingTab.body 同一个坑：原来这条表达式把
+        // NavigationStack + ProfileView + **19 个 case 的 switch** + 3 个 sheet
+        // + 1 个 fileImporter + 2 个 bottomDrawer 全塞在一起，规模约 11000 字符
+        // / 66 层大括号 —— 已经越过类型检查器上限，编译器会以
+        // `failed to produce diagnostic for expression` 放弃（同文件 1153 行刚犯过）。
+        //
+        // 拆成三块：导航宿主 / 路由 switch / 各种弹出层。
+        navHost
+            .sheet(item: $exportedFile) { file in
+                ShareSheet(items: [file.url])
+            }
+            .fileImporter(
+                isPresented: $showFileImporter,
+                allowedContentTypes: [.json],
+                allowsMultipleSelection: false
+            ) { result in
+                handleFilePick(result)
+            }
+            .bottomDrawer(
+                isPresented: $showImportPolicyPicker,
+                height: 420,
+                title: "导入方式",
+                subtitle: "本机已有 \(dataVM.finishedCount) 次训练记录"
+            ) {
+                importPolicyContent
+            }
+            .sheet(isPresented: $showExercisePicker, onDismiss: {
+                pickerContext = nil
+                planRefreshToken &+= 1
+            }) {
+                exercisePickerSheet
+            }
+            .bottomDrawer(
+                isPresented: $showNewPlanSheet,
+                height: 300,
+                title: "新建力量计划",
+                subtitle: "创建后进入计划详情添加动作"
+            ) {
+                NewPlanNameContent { name in
+                    createPlan(named: name)
+                }
+            }
+            .fileImporter(
+                isPresented: $showPlanImporter,
+                allowedContentTypes: [.json],
+                allowsMultipleSelection: false
+            ) { result in
+                handlePlanImport(result)
+            }
+    }
+
+    /// 我的页导航宿主。栈底是「我的」，路由分派交给 `profileDestination`。
+    private var navHost: some View {
         NavigationStack(path: $path) {
             ProfileView(
                 viewModel: ProfileViewModel(repository: repository),
@@ -282,268 +335,229 @@ private struct ProfileTab: View {
             // 我的页自带大标题导航栏，隐藏系统栏避免双层标题
             .navigationBarHidden(true)
             .navigationDestination(for: ProfileRoute.self) { route in
-                switch route {
-                case .bodyData:
-                    BodyDataView(
-                        viewModel: BodyDataViewModel(repository: repository),
-                        onBack: {
-                            popOne()
-                            profileReloadToken = UUID()
-                        },
-                        onDataChanged: { profileReloadToken = UUID() }
-                    )
+                profileDestination(for: route)
+            }
+        }
+    }
 
-                case .profileEdit:
-                    ProfileEditView(
-                        repository: repository,
-                        onCancel: {
-                            popOne()
-                        },
-                        onSaved: {
-                            // 保存成功：返回并刷新「我的」概览（昵称 / 头像 / 天数）
-                            popOne()
-                            profileReloadToken = UUID()
-                        }
-                    )
+    /// 我的页路由分派。19 个 case 全部只做「构造子页 + 接回调」，
+    /// 每个 case 的检查规模都很小；真正复杂的（计划详情 / 执行页）
+    /// 已经拆成独立方法。
+    @ViewBuilder
+    private func profileDestination(for route: ProfileRoute) -> some View {
+        switch route {
+        case .bodyData:
+            BodyDataView(
+                viewModel: BodyDataViewModel(repository: repository),
+                onBack: {
+                    popOne()
+                    profileReloadToken = UUID()
+                },
+                onDataChanged: { profileReloadToken = UUID() }
+            )
 
-                case .planList:
-                    PlanListView(
-                        repository: repository,
-                        onOpenPlan: { plan in
-                            path.append(ProfileRoute.planDetail(plan.id))
-                        },
-                        onStartTraining: { plan in
-                            startPlanDraft(plan)
-                        },
-                        onNewPlan: {
-                            showNewPlanSheet = true
-                        },
-                        onImportBackup: {
-                            showPlanImporter = true
-                        },
-                        onBack: {
-                            popOne()
-                            profileReloadToken = UUID()
-                        }
-                    )
-
-                case .planDetail(let planID):
-                    planDetailView(planID: planID)
-
-                case .exerciseConfig(let planID, let entry):
-                    PlanExerciseConfigView(
-                        entry: entry,
-                        item: lookupExercise(for: entry),
-                        planName: lookupPlanName(planID),
-                        onSave: { updated in
-                            try? repository.updatePlanExercise(updated, inPlan: planID)
-                        }
-                    )
-
-                case .sessionDraft(let sessionID):
-                    WorkoutSessionView(
-                        repository: repository,
-                        sessionID: sessionID,
-                        onFinished: { finished in
-                            path.append(ProfileRoute.sessionSummary(finished.id))
-                        },
-                        onMinimize: {
-                            if !path.isEmpty { path.removeLast() }
-                        },
-                        onEditConfig: { entry in
-                            guard let planID = try? repository.fetchSession(id: sessionID)?.planID else { return }
-                            path.append(ProfileRoute.exerciseConfig(planID: planID, entry: entry))
-                        },
-                        onRequestReplace: { card in
-                            pickerContext = ExercisePickerContext(
-                                planID: nil,
-                                replacingEntryID: nil,
-                                sessionID: sessionID,
-                                replacingExerciseID: card.exerciseID
-                            )
-                            showExercisePicker = true
-                        }
-                    )
-
-                case .sessionSummary(let sessionID):
-                    SessionSummaryView(
-                        repository: repository,
-                        sessionID: sessionID,
-                        onDone: {
-                            path = NavigationPath()
-                            profileReloadToken = UUID()
-                        },
-                        onOpenHistory: {
-                            // 跨 Tab 到历史栏定位本次训练，交给 RootView 处理。
-                            path = NavigationPath()
-                            onOpenHistory(sessionID)
-                        }
-                    )
-
-                case .favorites:
-                    FavoriteExercisesView(
-                        repository: repository,
-                        onBack: { popOne() },
-                        onOpenExercise: { item in
-                            onOpenExerciseDetail(item)
-                        },
-                        onBrowseExercises: {
-                            onBrowseExercises()
-                        }
-                    )
-
-                case .trainingPreferences:
-                    TrainingPreferencesView(onBack: { popOne() })
-
-                case .appSettings:
-                    AppSettingsView(
-                        onBack: {
-                            popOne()
-                            profileReloadToken = UUID()
-                        },
-                        onOpenUnits: {
-                            path.append(ProfileRoute.unitSettings)
-                        },
-                        onOpenSoundAndHaptics: {
-                            path.append(ProfileRoute.soundAndHaptics)
-                        },
-                        onOpenReduceMotion: {
-                            path.append(ProfileRoute.reduceMotion)
-                        },
-                        onOpenPermissions: {
-                            path.append(ProfileRoute.permissions)
-                        }
-                    )
-
-                case .unitSettings:
-                    UnitSettingsView(onBack: { popOne() })
-
-                case .soundAndHaptics:
-                    SoundAndHapticsView(onBack: { popOne() })
-
-                case .reduceMotion:
-                    ReduceMotionView(onBack: { popOne() })
-
-                case .permissions:
-                    PermissionSettingsView(onBack: { popOne() })
-
-                case .dataManagement:
-                    WorkoutDataManagementView(
-                        viewModel: WorkoutDataManagementViewModel(repository: repository),
-                        onBack: {
-                            popOne()
-                            profileReloadToken = UUID()
-                        },
-                        onDataChanged: { profileReloadToken = UUID() },
-                        onOpenExportBackup: {
-                            path.append(ProfileRoute.exportBackup)
-                        },
-                        onOpenImportBackup: {
-                            path.append(ProfileRoute.importBackup)
-                        },
-                        onOpenClearRecords: {
-                            path.append(ProfileRoute.clearRecords)
-                        },
-                        onOpenClearAll: {
-                            path.append(ProfileRoute.clearAllData)
-                        }
-                    )
-
-                case .exportBackup:
-                    ExportBackupView(
-                        viewModel: ExportBackupViewModel(repository: repository),
-                        onBack: { popOne() }
-                    )
-
-                case .importBackup:
-                    ImportBackupView(
-                        viewModel: ImportBackupViewModel(repository: repository),
-                        onDone: {
-                            popOne()
-                            profileReloadToken = UUID()
-                        },
-                        onViewHistory: {
-                            path = NavigationPath()
-                            onViewHistory()
-                        }
-                    )
-
-                case .clearRecords:
-                    ClearWorkoutRecordsView(
-                        repository: repository,
-                        onBack: {
-                            popOne()
-                            profileReloadToken = UUID()
-                        },
-                        onOpenExportBackup: {
-                            path.append(ProfileRoute.exportBackup)
-                        }
-                    )
-
-                case .clearAllData:
-                    ClearAllDataView(
-                        repository: repository,
-                        onBack: {
-                            popOne()
-                            profileReloadToken = UUID()
-                        },
-                        onOpenExportBackup: {
-                            path.append(ProfileRoute.exportBackup)
-                        },
-                        onClearedAllData: {
-                            path = NavigationPath()
-                            onClearedAllData()
-                        }
-                    )
+        case .profileEdit:
+            ProfileEditView(
+                repository: repository,
+                onCancel: {
+                    popOne()
+                },
+                onSaved: {
+                    // 保存成功：返回并刷新「我的」概览（昵称 / 头像 / 天数）
+                    popOne()
+                    profileReloadToken = UUID()
                 }
-            }
-        }
-        // 导出后的系统分享面板
-        .sheet(item: $exportedFile) { file in
-            ShareSheet(items: [file.url])
-        }
-        // 选备份文件
-        .fileImporter(
-            isPresented: $showFileImporter,
-            allowedContentTypes: [.json],
-            allowsMultipleSelection: false
-        ) { result in
-            handleFilePick(result)
-        }
-        // 导入合并策略选择
-        .bottomDrawer(
-            isPresented: $showImportPolicyPicker,
-            height: 420,
-            title: "导入方式",
-            subtitle: "本机已有 \(dataVM.finishedCount) 次训练记录"
-        ) {
-            importPolicyContent
-        }
-        // 页面 15：为计划挑选动作
-        .sheet(isPresented: $showExercisePicker, onDismiss: {
-            pickerContext = nil
-            planRefreshToken &+= 1
-        }) {
-            exercisePickerSheet
-        }
-        // 页面 15：新建力量计划命名
-        .bottomDrawer(
-            isPresented: $showNewPlanSheet,
-            height: 300,
-            title: "新建力量计划",
-            subtitle: "创建后进入计划详情添加动作"
-        ) {
-            NewPlanNameContent { name in
-                createPlan(named: name)
-            }
-        }
-        // 页面 15：导入本地计划备份
-        .fileImporter(
-            isPresented: $showPlanImporter,
-            allowedContentTypes: [.json],
-            allowsMultipleSelection: false
-        ) { result in
-            handlePlanImport(result)
+            )
+
+        case .planList:
+            PlanListView(
+                repository: repository,
+                onOpenPlan: { plan in
+                    path.append(ProfileRoute.planDetail(plan.id))
+                },
+                onStartTraining: { plan in
+                    startPlanDraft(plan)
+                },
+                onNewPlan: {
+                    showNewPlanSheet = true
+                },
+                onImportBackup: {
+                    showPlanImporter = true
+                },
+                onBack: {
+                    popOne()
+                    profileReloadToken = UUID()
+                }
+            )
+
+        case .planDetail(let planID):
+            planDetailView(planID: planID)
+
+        case .exerciseConfig(let planID, let entry):
+            PlanExerciseConfigView(
+                entry: entry,
+                item: lookupExercise(for: entry),
+                planName: lookupPlanName(planID),
+                onSave: { updated in
+                    try? repository.updatePlanExercise(updated, inPlan: planID)
+                }
+            )
+
+        case .sessionDraft(let sessionID):
+            WorkoutSessionView(
+                repository: repository,
+                sessionID: sessionID,
+                onFinished: { finished in
+                    path.append(ProfileRoute.sessionSummary(finished.id))
+                },
+                onMinimize: {
+                    popOne()
+                },
+                onEditConfig: { entry in
+                    guard let planID = try? repository.fetchSession(id: sessionID)?.planID else { return }
+                    path.append(ProfileRoute.exerciseConfig(planID: planID, entry: entry))
+                },
+                onRequestReplace: { card in
+                    pickerContext = ExercisePickerContext(
+                        planID: nil,
+                        replacingEntryID: nil,
+                        sessionID: sessionID,
+                        replacingExerciseID: card.exerciseID
+                    )
+                    showExercisePicker = true
+                }
+            )
+
+        case .sessionSummary(let sessionID):
+            SessionSummaryView(
+                repository: repository,
+                sessionID: sessionID,
+                onDone: {
+                    popToRoot()
+                    profileReloadToken = UUID()
+                },
+                onOpenHistory: {
+                    // 跨 Tab 到历史栏定位本次训练，交给 RootView 处理。
+                    popToRoot()
+                    onOpenHistory(sessionID)
+                }
+            )
+
+        case .favorites:
+            FavoriteExercisesView(
+                repository: repository,
+                onBack: { popOne() },
+                onOpenExercise: { item in
+                    onOpenExerciseDetail(item)
+                },
+                onBrowseExercises: {
+                    onBrowseExercises()
+                }
+            )
+
+        case .trainingPreferences:
+            TrainingPreferencesView(onBack: { popOne() })
+
+        case .appSettings:
+            AppSettingsView(
+                onBack: {
+                    popOne()
+                    profileReloadToken = UUID()
+                },
+                onOpenUnits: {
+                    path.append(ProfileRoute.unitSettings)
+                },
+                onOpenSoundAndHaptics: {
+                    path.append(ProfileRoute.soundAndHaptics)
+                },
+                onOpenReduceMotion: {
+                    path.append(ProfileRoute.reduceMotion)
+                },
+                onOpenPermissions: {
+                    path.append(ProfileRoute.permissions)
+                }
+            )
+
+        case .unitSettings:
+            UnitSettingsView(onBack: { popOne() })
+
+        case .soundAndHaptics:
+            SoundAndHapticsView(onBack: { popOne() })
+
+        case .reduceMotion:
+            ReduceMotionView(onBack: { popOne() })
+
+        case .permissions:
+            PermissionSettingsView(onBack: { popOne() })
+
+        case .dataManagement:
+            WorkoutDataManagementView(
+                viewModel: WorkoutDataManagementViewModel(repository: repository),
+                onBack: {
+                    popOne()
+                    profileReloadToken = UUID()
+                },
+                onDataChanged: { profileReloadToken = UUID() },
+                onOpenExportBackup: {
+                    path.append(ProfileRoute.exportBackup)
+                },
+                onOpenImportBackup: {
+                    path.append(ProfileRoute.importBackup)
+                },
+                onOpenClearRecords: {
+                    path.append(ProfileRoute.clearRecords)
+                },
+                onOpenClearAll: {
+                    path.append(ProfileRoute.clearAllData)
+                }
+            )
+
+        case .exportBackup:
+            ExportBackupView(
+                viewModel: ExportBackupViewModel(repository: repository),
+                onBack: { popOne() }
+            )
+
+        case .importBackup:
+            ImportBackupView(
+                viewModel: ImportBackupViewModel(repository: repository),
+                onDone: {
+                    popOne()
+                    profileReloadToken = UUID()
+                },
+                onViewHistory: {
+                    popToRoot()
+                    onViewHistory()
+                }
+            )
+
+        case .clearRecords:
+            ClearWorkoutRecordsView(
+                repository: repository,
+                onBack: {
+                    popOne()
+                    profileReloadToken = UUID()
+                },
+                onOpenExportBackup: {
+                    path.append(ProfileRoute.exportBackup)
+                }
+            )
+
+        case .clearAllData:
+            ClearAllDataView(
+                repository: repository,
+                onBack: {
+                    popOne()
+                    profileReloadToken = UUID()
+                },
+                onOpenExportBackup: {
+                    path.append(ProfileRoute.exportBackup)
+                },
+                onClearedAllData: {
+                    popToRoot()
+                    onClearedAllData()
+                }
+            )
         }
     }
 
@@ -551,6 +565,15 @@ private struct ProfileTab: View {
     private func popOne() {
         guard !path.isEmpty else { return }
         path.removeLast()
+    }
+
+    /// 清空整个栈，回到「我的」首页。
+    ///
+    /// 用于「总结页完成 / 导入完成 / 清除全部数据」这类**已离开本页语义**的场景：
+    /// 一次次 `removeLast()` 会在中间每一层触发 `onAppear` 重新读盘，
+    /// 一次清空更稳，也不会闪出中间页。
+    private func popToRoot() {
+        path = NavigationPath()
     }
 
     // MARK: 页面 15 计划详情 / 执行页 / 动作选择器
@@ -880,6 +903,20 @@ private struct HistoryTab: View {
     @State private var historyReloadToken = UUID()
 
     var body: some View {
+        // 与 TrainingTab / ProfileTab 同一个坑：原来把 NavigationStack +
+        // HistoryView + 9 个 case 的 switch（内含 4 个闭包的执行页、趋势页）
+        // 拼成一条约 7500 字符 / 38 层大括号的表达式。
+        // 同一个文件的 1153 行已经因此被编译器拒过一次，这里一并拆开。
+        navHost
+            .task(id: highlightSessionID) {
+                // 新的定位请求到来时重新放行，允许下一次「查看历史记录」再次入栈
+                if highlightSessionID == nil { didPushHighlight = false }
+                await handleHighlight()
+            }
+    }
+
+    /// 历史页导航宿主。
+    private var navHost: some View {
         NavigationStack(path: $path) {
             HistoryView(
                 viewModel: HistoryViewModel(repository: repository),
@@ -898,161 +935,172 @@ private struct HistoryTab: View {
             .id(historyReloadToken)
             .navigationBarHidden(true)
             .navigationDestination(for: HistoryRoute.self) { route in
-                switch route {
-                case .sessionDetail(let sessionID):
-                    HistorySessionDetailView(
-                        viewModel: HistorySessionDetailViewModel(
-                            repository: repository,
-                            sessionID: sessionID
-                        ),
-                        // 返回时无条件刷新：详情页可能改过名、改过备注、
-                        // 或者已经删掉了这条记录，历史页的日历与列表都需要重读。
-                        // 不做「有没有真的改」的判断——一次多余的本地读盘
-                        // 远便宜于漏刷一次导致的错误标记。
-                        onBack: {
-                            popOne()
-                            historyReloadToken = UUID()
-                        },
-                        onOpenDraft: { draftID in
-                            path.append(HistoryRoute.sessionDraft(draftID))
-                        }
-                    )
-                case .sessionDraft(let draftID):
-                    WorkoutSessionView(
-                        repository: repository,
-                        sessionID: draftID,
-                        onFinished: { _ in
-                            // 完成后退出执行页回到历史页。
-                            // 不在这里自动跳总结页：从历史页补记训练的用户
-                            // 想看到的是日历上多了一条记录，而不是被推到总结页。
-                            path = NavigationPath()
-                            historyReloadToken = UUID()
-                        },
-                        onMinimize: {
-                            // 草稿已实时落盘，退出页面后仍可从首页「继续训练」进入。
-                            // 草稿是未结束状态，不进日历标记，但历史页的列表要重新读。
-                            if !path.isEmpty { path.removeLast() }
-                            historyReloadToken = UUID()
-                        },
-                        onEditConfig: { _ in
-                            // 自由训练草稿没有关联计划，不提供动作配置编辑
-                        },
-                        onRequestReplace: { _ in
-                            // 同上：自由训练从空开始，替换动作在训练页内完成
-                        }
-                    )
-                case .stats:
-                    WorkoutStatisticsView(
-                        viewModel: WorkoutStatisticsViewModel(repository: repository),
-                        // 用 popOne() 而不是清空整个栈：统计页是从历史页的
-                        // 「统计」分段推上来的，清空会把历史页已经滚到的位置
-                        // 和分段选择一起丢掉（页面 09 已记录过这条）。
-                        onBack: { popOne() },
-                        onOpenDataManagement: {
-                            path.append(HistoryRoute.statsDataManagement)
-                        },
-                        onOpenExerciseTrend: { stat in
-                            path.append(HistoryRoute.exerciseTrend(stat.exerciseID))
-                        }
-                    )
-
-                case .statsDataManagement:
-                    WorkoutDataManagementView(
-                        viewModel: WorkoutDataManagementViewModel(repository: repository),
-                        onBack: { popOne() },
-                        // 清除或导入后，历史页的日历标记、列表条数与统计数字
-                        // 都要重算。historyReloadToken 会强制重建历史页，
-                        // 而统计页在返回时会重新走 .task { load() }。
-                        onDataChanged: { historyReloadToken = UUID() },
-                        onOpenExportBackup: {
-                            path.append(HistoryRoute.exportBackup)
-                        },
-                        onOpenImportBackup: {
-                            path.append(HistoryRoute.importBackup)
-                        },
-                        onOpenClearRecords: {
-                            path.append(HistoryRoute.clearRecords)
-                        },
-                        onOpenClearAll: {
-                            path.append(HistoryRoute.clearAllData)
-                        }
-                    )
-
-                case .exportBackup:
-                    ExportBackupView(
-                        viewModel: ExportBackupViewModel(repository: repository),
-                        onBack: { popOne() }
-                    )
-
-                case .importBackup:
-                    ImportBackupView(
-                        viewModel: ImportBackupViewModel(repository: repository),
-                        onDone: {
-                            popOne()
-                            historyReloadToken = UUID()
-                        },
-                        onViewHistory: {
-                            path = NavigationPath()
-                            historyReloadToken = UUID()
-                        }
-                    )
-
-                case .clearRecords:
-                    ClearWorkoutRecordsView(
-                        repository: repository,
-                        onBack: {
-                            popOne()
-                            historyReloadToken = UUID()
-                        },
-                        onOpenExportBackup: {
-                            path.append(HistoryRoute.exportBackup)
-                        }
-                    )
-
-                case .clearAllData:
-                    ClearAllDataView(
-                        repository: repository,
-                        onBack: {
-                            popOne()
-                            historyReloadToken = UUID()
-                        },
-                        onOpenExportBackup: {
-                            path.append(HistoryRoute.exportBackup)
-                        },
-                        onClearedAllData: {
-                            path = NavigationPath()
-                            onClearedAllData()
-                        }
-                    )
-
-                case .exerciseTrend(let exerciseID):
-                    ExerciseTrendDetailView(
-                        viewModel: ExerciseTrendDetailViewModel(
-                            exerciseID: exerciseID,
-                            fallbackName: exerciseName(for: exerciseID),
-                            repository: repository
-                        ),
-                        onBack: { popOne() },
-                        // 「最近记录」进的是历史训练详情页，和历史页里点某一天
-                        // 走同一个路由：返回栈因此是连贯的，用户不需要先退到
-                        // 趋势页再退一次才能回到历史页。
-                        onOpenSessionDetail: { sessionID in
-                            path.append(HistoryRoute.sessionDetail(sessionID))
-                        },
-                        // 草稿在趋势页里已经落盘，交给执行页的只是一个 id。
-                        // 传内存对象的话执行页刷新一次就会丢掉未保存的组。
-                        onStartTraining: { draftID in
-                            path.append(HistoryRoute.sessionDraft(draftID))
-                        }
-                    )
-                }
+                historyDestination(for: route)
             }
         }
-        .task(id: highlightSessionID) {
-            // 新的定位请求到来时重新放行，允许下一次「查看历史记录」再次入栈
-            if highlightSessionID == nil { didPushHighlight = false }
-            await handleHighlight()
+    }
+
+    /// 历史页路由分派。
+    @ViewBuilder
+    private func historyDestination(for route: HistoryRoute) -> some View {
+        switch route {
+        case .sessionDetail(let sessionID):
+            HistorySessionDetailView(
+                viewModel: HistorySessionDetailViewModel(
+                    repository: repository,
+                    sessionID: sessionID
+                ),
+                // 返回时无条件刷新：详情页可能改过名、改过备注、
+                // 或者已经删掉了这条记录，历史页的日历与列表都需要重读。
+                // 不做「有没有真的改」的判断——一次多余的本地读盘
+                // 远便宜于漏刷一次导致的错误标记。
+                onBack: {
+                    popOne()
+                    historyReloadToken = UUID()
+                },
+                onOpenDraft: { draftID in
+                    path.append(HistoryRoute.sessionDraft(draftID))
+                }
+            )
+        case .sessionDraft(let draftID):
+            WorkoutSessionView(
+                repository: repository,
+                sessionID: draftID,
+                onFinished: { _ in
+                    // 完成后退出执行页回到历史页。
+                    // 不在这里自动跳总结页：从历史页补记训练的用户
+                    // 想看到的是日历上多了一条记录，而不是被推到总结页。
+                    historyPopToRoot()
+                },
+                onMinimize: {
+                    // 草稿已实时落盘，退出页面后仍可从首页「继续训练」进入。
+                    // 草稿是未结束状态，不进日历标记，但历史页的列表要重新读。
+                    popOne()
+                    historyReloadToken = UUID()
+                },
+                onEditConfig: { _ in
+                    // 自由训练草稿没有关联计划，不提供动作配置编辑
+                },
+                onRequestReplace: { _ in
+                    // 同上：自由训练从空开始，替换动作在训练页内完成
+                }
+            )
+        case .stats:
+            WorkoutStatisticsView(
+                viewModel: WorkoutStatisticsViewModel(repository: repository),
+                // 用 popOne() 而不是清空整个栈：统计页是从历史页的
+                // 「统计」分段推上来的，清空会把历史页已经滚到的位置
+                // 和分段选择一起丢掉（页面 09 已记录过这条）。
+                onBack: { popOne() },
+                onOpenDataManagement: {
+                    path.append(HistoryRoute.statsDataManagement)
+                },
+                onOpenExerciseTrend: { stat in
+                    path.append(HistoryRoute.exerciseTrend(stat.exerciseID))
+                }
+            )
+
+        case .statsDataManagement:
+            WorkoutDataManagementView(
+                viewModel: WorkoutDataManagementViewModel(repository: repository),
+                onBack: { popOne() },
+                // 清除或导入后，历史页的日历标记、列表条数与统计数字
+                // 都要重算。historyReloadToken 会强制重建历史页，
+                // 而统计页在返回时会重新走 .task { load() }。
+                onDataChanged: { historyReloadToken = UUID() },
+                onOpenExportBackup: {
+                    path.append(HistoryRoute.exportBackup)
+                },
+                onOpenImportBackup: {
+                    path.append(HistoryRoute.importBackup)
+                },
+                onOpenClearRecords: {
+                    path.append(HistoryRoute.clearRecords)
+                },
+                onOpenClearAll: {
+                    path.append(HistoryRoute.clearAllData)
+                }
+            )
+
+        case .exportBackup:
+            ExportBackupView(
+                viewModel: ExportBackupViewModel(repository: repository),
+                onBack: { popOne() }
+            )
+
+        case .importBackup:
+            ImportBackupView(
+                viewModel: ImportBackupViewModel(repository: repository),
+                onDone: {
+                    popOne()
+                    historyReloadToken = UUID()
+                },
+                onViewHistory: {
+                    historyPopToRoot()
+                }
+            )
+
+        case .clearRecords:
+            ClearWorkoutRecordsView(
+                repository: repository,
+                onBack: {
+                    popOne()
+                    historyReloadToken = UUID()
+                },
+                onOpenExportBackup: {
+                    path.append(HistoryRoute.exportBackup)
+                }
+            )
+
+        case .clearAllData:
+            ClearAllDataView(
+                repository: repository,
+                onBack: {
+                    popOne()
+                    historyReloadToken = UUID()
+                },
+                onOpenExportBackup: {
+                    path.append(HistoryRoute.exportBackup)
+                },
+                onClearedAllData: {
+                    path = NavigationPath()
+                    onClearedAllData()
+                }
+            )
+
+        case .exerciseTrend(let exerciseID):
+            ExerciseTrendDetailView(
+                viewModel: ExerciseTrendDetailViewModel(
+                    exerciseID: exerciseID,
+                    fallbackName: exerciseName(for: exerciseID),
+                    repository: repository
+                ),
+                onBack: { popOne() },
+                // 「最近记录」进的是历史训练详情页，和历史页里点某一天
+                // 走同一个路由：返回栈因此是连贯的，用户不需要先退到
+                // 趋势页再退一次才能回到历史页。
+                onOpenSessionDetail: { sessionID in
+                    path.append(HistoryRoute.sessionDetail(sessionID))
+                },
+                // 草稿在趋势页里已经落盘，交给执行页的只是一个 id。
+                // 传内存对象的话执行页刷新一次就会丢掉未保存的组。
+                onStartTraining: { draftID in
+                    path.append(HistoryRoute.sessionDraft(draftID))
+                }
+            )
         }
+    }
+
+    /// 清空整栈 + 刷新历史页数据。
+    ///
+    /// 执行页完成 / 导入完成这两处需要「回到历史页并重新读盘」，
+    /// 原来写的是 `path = NavigationPath()` 紧跟一行 `historyReloadToken = UUID()`，
+    /// 两处重复。抽成方法是为了让「清栈」这件事只有一个写法 ——
+    /// 注意这里**不用 `popOne()`**：草稿执行页是从列表推上来的，
+    /// 但完成后要落回列表本身而不是中间层，且必须重新读盘。
+    private func historyPopToRoot() {
+        path = NavigationPath()
+        historyReloadToken = UUID()
     }
 
     /// 「查看历史记录」的目标是历史页里的本次训练详情页，因此直接推入详情。
@@ -1151,61 +1199,80 @@ private struct TrainingTab: View {
     @State private var homeReloadID = UUID()
 
     var body: some View {
-        NavigationStack(path: $path) {
-            TrainingHomeView(
-                viewModel: TrainingHomeViewModel(repository: repository),
-                onStartTraining: { state in
-                    switch state {
-                    case .scheduled(let planID, _, _, _):
-                        startDraft(forPlanID: planID)
-                    case .inProgress(let sessionID, _, _):
-                        // App 被终止或用户最小化后重开：草稿还在磁盘上，
-                        // 直接回到执行页接着练，不新建也不丢已完成的组。
-                        path.append(TrainingRoute.sessionDraft(sessionID))
-                    default:
-                        break
-                    }
-                },
-                onNewStrength: { startFreeStrengthDraft() },
-                onNewCardio: { path.append(TrainingRoute.newCardio) },
-                onOpenPlan: { plan in
-                    path.append(TrainingRoute.planDetail(plan.id))
-                },
-                onOpenSession: { session in
-                    // 首页「最近训练」点进历史训练详情（页面 09）。
-                    // 规格里页面 09 的入口有两个：历史日历 / 训练列表，
-                    // 首页最近训练就是后者的一个具体位置。
-                    path.append(TrainingRoute.historyDetail(session.id))
-                },
-                onOpenCalendar: { /* 待接入日历 / 计划 */ },
-                onOpenMore: { /* 待接入更多设置 */ },
-                onResumeSession: { session in
-                    path.append(TrainingRoute.sessionDraft(session.id))
-                },
-                onOpenRecovery: {
-                    path.append(TrainingRoute.recovery)
-                }
-            )
-            // 首页自带大标题导航栏，隐藏系统栏避免出现双层标题
-            .navigationBarHidden(true)
-            .navigationDestination(for: TrainingRoute.self) { route in
-                destination(for: route)
+        // 这个 body 原本是一整条表达式：NavigationStack + 一个带 8 个闭包的
+        // TrainingHomeView + navigationDestination + id + onChange + sheet。
+        // 单个表达式的规模超出类型检查器上限时，Swift 会以
+        // `error: failed to produce diagnostic for expression` 直接放弃
+        // （不是语法错，也没有具体报错点，只在 `var body` 那一行报）。
+        //
+        // 修法就是**把大表达式拆成若干小方法**，让每个方法的检查规模回到正常。
+        // 拆成：导航宿主 / 首页 / 选动作 sheet 三块，各自独立可检查。
+        navHost
+            .sheet(isPresented: $showExercisePicker, onDismiss: {
+                // 挑选动作会直接写入计划，但计划详情页此时仍在栈里、
+                // 不会重新走 onAppear；必须显式刷新，否则返回后看不到新动作。
+                pickerContext = nil
+                planRefreshToken &+= 1
+            }) {
+                exercisePickerSheet
             }
+    }
+
+    /// 导航栈宿主：栈底是训练首页，注册全部训练路由。
+    private var navHost: some View {
+        NavigationStack(path: $path) {
+            homeRoot
+                .navigationDestination(for: TrainingRoute.self) { route in
+                    destination(for: route)
+                }
         }
+        // 训练结束后首页已在栈底、不会重新走 onAppear，
+        // 用 id 强制重建最内层视图，保证「最近训练」立刻反映本次训练。
         .id(homeReloadID)
         .onChange(of: reloadToken) { _ in
-            // 训练结束后首页已在栈底、不会重新走 onAppear，
-            // 用 id 强制重建最内层视图，保证「最近训练」立刻反映本次训练。
             homeReloadID = UUID()
         }
-        .sheet(isPresented: $showExercisePicker, onDismiss: {
-            // 挑选动作会直接写入计划，但计划详情页此时仍在栈里、
-            // 不会重新走 onAppear；必须显式刷新，否则返回后看不到新动作。
-            pickerContext = nil
-            planRefreshToken &+= 1
-        }) {
-            exercisePickerSheet
-        }
+    }
+
+    /// 栈底的训练首页。8 个闭包回调各自只有一两行，拆出来后
+    /// TrainingHomeView 的构造不再是 `var body` 表达式的一部分。
+    private var homeRoot: some View {
+        TrainingHomeView(
+            viewModel: TrainingHomeViewModel(repository: repository),
+            onStartTraining: { state in
+                switch state {
+                case .scheduled(let planID, _, _, _):
+                    startDraft(forPlanID: planID)
+                case .inProgress(let sessionID, _, _):
+                    // App 被终止或用户最小化后重开：草稿还在磁盘上，
+                    // 直接回到执行页接着练，不新建也不丢已完成的组。
+                    path.append(TrainingRoute.sessionDraft(sessionID))
+                default:
+                    break
+                }
+            },
+            onNewStrength: { startFreeStrengthDraft() },
+            onNewCardio: { path.append(TrainingRoute.newCardio) },
+            onOpenPlan: { plan in
+                path.append(TrainingRoute.planDetail(plan.id))
+            },
+            onOpenSession: { session in
+                // 首页「最近训练」点进历史训练详情（页面 09）。
+                // 规格里页面 09 的入口有两个：历史日历 / 训练列表，
+                // 首页最近训练就是后者的一个具体位置。
+                path.append(TrainingRoute.historyDetail(session.id))
+            },
+            onOpenCalendar: { /* 待接入日历 / 计划 */ },
+            onOpenMore: { /* 待接入更多设置 */ },
+            onResumeSession: { session in
+                path.append(TrainingRoute.sessionDraft(session.id))
+            },
+            onOpenRecovery: {
+                path.append(TrainingRoute.recovery)
+            }
+        )
+        // 首页自带大标题导航栏，隐藏系统栏避免出现双层标题
+        .navigationBarHidden(true)
     }
 
     /// 变化时让计划详情页重新拉数据。用 token 而不是通知，
@@ -1225,59 +1292,9 @@ private struct TrainingTab: View {
             planDetailView(planID: planID)
 
         case .exerciseConfig(let planID, let entry):
-            PlanExerciseConfigView(
-                entry: entry,
-                item: lookupItem(for: entry),
-                planName: lookupPlanName(planID),
-                onSave: { updated in
-                    // 计划详情页会在重新出现时读到最新数据，这里不必再回传
-                    try? repository.updatePlanExercise(updated, inPlan: planID)
-                },
-                onReplace: {
-                    configPlanID = planID
-                    configEntry = entry
-                    showReplace = true
-                },
-                onRemove: {
-                    try? repository.removePlanExercise(entry.id, fromPlan: planID)
-                    if !path.isEmpty { path.removeLast() }
-                },
-                onOpenProgression: { _ in
-                    configPlanID = planID
-                    configEntry = entry
-                    showProgression = true
-                }
-            )
-            .sheet(isPresented: $showReplace) {
-                if let planID = configPlanID, let entry = configEntry,
-                   let current = lookupItem(for: entry) {
-                    ReplaceExerciseView(
-                        current: current,
-                        repository: repository,
-                        existingIDsInPlan: planExerciseIDs(inPlan: planID),
-                        onConfirm: { newItem, strategy in
-                            try? repository.replacePlanExercise(entry.id, inPlan: planID, withExerciseID: newItem.id)
-                            showReplace = false
-                            planRefreshToken &+= 1
-                        },
-                        onCancel: { showReplace = false }
-                    )
-                }
-            }
-            .sheet(isPresented: $showProgression) {
-                if let planID = configPlanID, let entry = configEntry {
-                    ProgressionRuleView(
-                        config: entry.progressionConfig,
-                        baseWeight: entry.defaultWeight ?? 40,
-                        onSave: { config in
-                            var updated = entry
-                            updated.progressionConfig = config
-                            try? repository.updatePlanExercise(updated, inPlan: planID)
-                            showProgression = false
-                        }
-                    )
-                }
-            }
+            // 这个分支自带 4 个闭包 + 2 个嵌套 sheet，内联进 switch 会让
+            // 整个 `destination(for:)` 的检查规模爆炸。拆出去。
+            exerciseConfigView(planID: planID, entry: entry)
 
         case .sessionDraft(let sessionID):
             // 力量 / 有氧两套执行页分派给独立方法。
@@ -1326,6 +1343,81 @@ private struct TrainingTab: View {
             DataRecoveryView(
                 repository: repository,
                 onBack: { popOne() }
+            )
+        }
+    }
+
+    /// 动作配置页（页面 04 子页）。带两个嵌套 sheet：替换动作、递增规则。
+    ///
+    /// 单独成方法而不是内联在 `destination(for:)`：4 个闭包 + 2 层 `sheet`
+    /// 内联会让整个 `switch` 的类型检查规模超出上限。
+    private func exerciseConfigView(planID: UUID, entry: PlanExercise) -> some View {
+        PlanExerciseConfigView(
+            entry: entry,
+            item: lookupItem(for: entry),
+            planName: lookupPlanName(planID),
+            onSave: { updated in
+                // 计划详情页会在重新出现时读到最新数据，这里不必再回传
+                try? repository.updatePlanExercise(updated, inPlan: planID)
+            },
+            onReplace: {
+                configPlanID = planID
+                configEntry = entry
+                showReplace = true
+            },
+            onRemove: {
+                try? repository.removePlanExercise(entry.id, fromPlan: planID)
+                popOne()
+            },
+            onOpenProgression: { _ in
+                configPlanID = planID
+                configEntry = entry
+                showProgression = true
+            }
+        )
+        .sheet(isPresented: $showReplace) {
+            replaceExerciseSheet
+        }
+        .sheet(isPresented: $showProgression) {
+            progressionSheet
+        }
+    }
+
+    /// 替换动作 sheet。目标计划与条目从上一步的 `configPlanID` / `configEntry` 取，
+    /// 用 sheet 的内容闭包读，保证拿到的是打开那一刻的值。
+    @ViewBuilder
+    private var replaceExerciseSheet: some View {
+        if let planID = configPlanID, let entry = configEntry,
+           let current = lookupItem(for: entry) {
+            ReplaceExerciseView(
+                current: current,
+                repository: repository,
+                existingIDsInPlan: planExerciseIDs(inPlan: planID),
+                onConfirm: { newItem, _ in
+                    try? repository.replacePlanExercise(
+                        entry.id, inPlan: planID, withExerciseID: newItem.id
+                    )
+                    showReplace = false
+                    planRefreshToken &+= 1
+                },
+                onCancel: { showReplace = false }
+            )
+        }
+    }
+
+    /// 递增规则 sheet。
+    @ViewBuilder
+    private var progressionSheet: some View {
+        if let planID = configPlanID, let entry = configEntry {
+            ProgressionRuleView(
+                config: entry.progressionConfig,
+                baseWeight: entry.defaultWeight ?? 40,
+                onSave: { config in
+                    var updated = entry
+                    updated.progressionConfig = config
+                    try? repository.updatePlanExercise(updated, inPlan: planID)
+                    showProgression = false
+                }
             )
         }
     }
@@ -1706,6 +1798,37 @@ private struct ExercisesTab: View {
     }
 
     var body: some View {
+        // 四个 Tab 里最后一个大 body（约 6100 字符 / 35 层大括号），
+        // 与另外三个 Tab 统一拆法，避免哪天编译器在这里也放弃。
+        navHost
+            .task {
+                // 从「动作收藏」跨 Tab 进来：出现即推入该动作详情，
+                // 然后消费掉待处理标记。
+                if let item = pendingDetail {
+                    path.append(ExerciseRoute.detail(item))
+                    onConsumePendingDetail()
+                }
+            }
+            .sheet(isPresented: $showEditor, onDismiss: {
+                // 编辑器里可能顺手改了收藏 / 隐藏状态，回来时刷新一次
+                viewModel.reloadAfterExternalChange()
+            }) {
+                CustomExerciseEditor(repository: repository, editing: editingCustom) { saved in
+                    viewModel.upsertCustomExercise(saved)
+                    // 新建后跳转到新动作详情页（页面 23）。
+                    if editingCustom == nil {
+                        path.append(ExerciseRoute.detail(saved))
+                    }
+                } onDeleted: {
+                    viewModel.reloadAfterExternalChange()
+                    // 编辑是从详情页进入的，删除后回到动作库根页。
+                    exercisePopToRoot()
+                }
+            }
+    }
+
+    /// 动作库导航宿主。
+    private var navHost: some View {
         NavigationStack(path: $path) {
             ExerciseLibraryView(
                 viewModel: viewModel,
@@ -1727,129 +1850,122 @@ private struct ExercisesTab: View {
             // 动作库自带大标题导航栏，隐藏系统栏避免出现双层标题
             .navigationBarHidden(true)
             .navigationDestination(for: ExerciseRoute.self) { route in
-                switch route {
-                case .detail(let item):
-                    ExerciseDetailView(
-                        item: item,
-                        repository: repository,
-                        onOpenMuscle: { muscle in
-                            // 回到动作库根页并应用该肌群筛选
-                            viewModel.applyMuscleFilterFromDetail(muscle)
-                            path = NavigationPath()
-                        },
-                        onEditExercise: { item in
-                            editingCustom = item
-                            showEditor = true
-                        },
-                        onOpenPlan: { planID in
-                            // 「添加到已有计划」保存成功后，直接推入计划详情页，
-                            // 让用户马上看到动作已经落到计划里的什么位置。
-                            viewModel.reloadAfterExternalChange()
-                            path.append(ExerciseRoute.planDetail(planID))
-                        },
-                        onOpenHistory: {
-                            // 动作 id 是本地库里的稳定主键，路由里只带它。
-                            // 趋势页自己会查库拿名字，查不到时退回快照名/未知动作。
-                            path.append(ExerciseRoute.exerciseTrend(item.id))
-                        }
-                    )
+                exerciseDestination(for: route)
+            }
+        }
+    }
 
-                case .exerciseTrend(let exerciseID):
-                    ExerciseTrendDetailView(
-                        viewModel: ExerciseTrendDetailViewModel(
-                            exerciseID: exerciseID,
-                            fallbackName: lookupExerciseName(exerciseID),
-                            repository: repository
-                        ),
-                        onBack: { popExerciseOne() },
-                        onOpenSessionDetail: { sessionID in
-                            path.append(ExerciseRoute.historyDetail(sessionID))
-                        },
-                        onStartTraining: { draftID in
-                            path.append(ExerciseRoute.sessionDraft(draftID))
-                        }
-                    )
-
-                case .historyDetail(let sessionID):
-                    HistorySessionDetailView(
-                        viewModel: HistorySessionDetailViewModel(
-                            repository: repository,
-                            sessionID: sessionID
-                        ),
-                        onBack: { popExerciseOne() },
-                        onOpenDraft: { draftID in
-                            path.append(ExerciseRoute.sessionDraft(draftID))
-                        }
-                    )
-
-                case .sessionDraft(let draftID):
-                    WorkoutSessionView(
-                        repository: repository,
-                        sessionID: draftID,
-                        onFinished: { _ in
-                            // 训练结束后回到动作库根页：这条栈的起点不是历史页，
-                            // 没有「日历上多一条记录」的上下文可回。
-                            path = NavigationPath()
-                            viewModel.reloadAfterExternalChange()
-                        },
-                        onMinimize: { popExerciseOne() },
-                        onEditConfig: { _ in
-                            // 自由训练草稿没有关联计划，不提供动作配置编辑
-                        },
-                        onRequestReplace: { _ in
-                            // 同上：自由训练从空开始，替换动作在训练页内完成
-                        }
-                    )
-
-                case .planDetail(let planID):
-                    PlanDetailView(
-                        repository: repository,
-                        planID: planID,
-                        onStartTraining: { _ in
-                            // 训练执行页尚未实现。这一路是从动作库进来的，
-                            // 保持留在计划详情页比跳到占位页更合理。
-                        },
-                        onOpenExerciseConfig: { entry in
-                            try? repository.updatePlanExercise(entry, inPlan: planID)
-                        },
-                        onAddExercise: { _ in
-                            viewModel.reloadAfterExternalChange()
-                            path = NavigationPath()
-                        },
-                        onReplaceExercise: { _ in },
-                        onOpenPlan: { copyID in
-                            path.append(ExerciseRoute.planDetail(copyID))
-                        },
-                        onDeleted: {
-                            if !path.isEmpty { path.removeLast() }
-                        }
-                    )
+    /// 动作库路由分派。
+    @ViewBuilder
+    private func exerciseDestination(for route: ExerciseRoute) -> some View {
+        switch route {
+        case .detail(let item):
+            ExerciseDetailView(
+                item: item,
+                repository: repository,
+                onOpenMuscle: { muscle in
+                    // 回到动作库根页并应用该肌群筛选
+                    viewModel.applyMuscleFilterFromDetail(muscle)
+                    path = NavigationPath()
+                },
+                onEditExercise: { item in
+                    editingCustom = item
+                    showEditor = true
+                },
+                onOpenPlan: { planID in
+                    // 「添加到已有计划」保存成功后，直接推入计划详情页，
+                    // 让用户马上看到动作已经落到计划里的什么位置。
+                    viewModel.reloadAfterExternalChange()
+                    path.append(ExerciseRoute.planDetail(planID))
+                },
+                onOpenHistory: {
+                    // 动作 id 是本地库里的稳定主键，路由里只带它。
+                    // 趋势页自己会查库拿名字，查不到时退回快照名/未知动作。
+                    path.append(ExerciseRoute.exerciseTrend(item.id))
                 }
-            }
-        }
-        // 从「动作收藏」跨 Tab 进来：出现即推入该动作详情，然后消费掉待处理标记。
-        .task {
-            if let item = pendingDetail {
-                path.append(ExerciseRoute.detail(item))
-                onConsumePendingDetail()
-            }
-        }
-        .sheet(isPresented: $showEditor, onDismiss: {
-            // 编辑器里可能顺手改了收藏 / 隐藏状态，回来时刷新一次
-            viewModel.reloadAfterExternalChange()
-        }) {
-            CustomExerciseEditor(repository: repository, editing: editingCustom) { saved in
-                viewModel.upsertCustomExercise(saved)
-                // 新建后跳转到新动作详情页（页面 23）。
-                if editingCustom == nil {
-                    path.append(ExerciseRoute.detail(saved))
+            )
+
+        case .exerciseTrend(let exerciseID):
+            ExerciseTrendDetailView(
+                viewModel: ExerciseTrendDetailViewModel(
+                    exerciseID: exerciseID,
+                    fallbackName: lookupExerciseName(exerciseID),
+                    repository: repository
+                ),
+                onBack: { popExerciseOne() },
+                onOpenSessionDetail: { sessionID in
+                    path.append(ExerciseRoute.historyDetail(sessionID))
+                },
+                onStartTraining: { draftID in
+                    path.append(ExerciseRoute.sessionDraft(draftID))
                 }
-            } onDeleted: {
-                viewModel.reloadAfterExternalChange()
-                // 编辑是从详情页进入的，删除后回到动作库根页。
-                path = NavigationPath()
-            }
+            )
+
+        case .historyDetail(let sessionID):
+            HistorySessionDetailView(
+                viewModel: HistorySessionDetailViewModel(
+                    repository: repository,
+                    sessionID: sessionID
+                ),
+                onBack: { popExerciseOne() },
+                onOpenDraft: { draftID in
+                    path.append(ExerciseRoute.sessionDraft(draftID))
+                }
+            )
+
+        case .sessionDraft(let draftID):
+            WorkoutSessionView(
+                repository: repository,
+                sessionID: draftID,
+                onFinished: { _ in
+                    // 训练结束后回到动作库根页：这条栈的起点不是历史页，
+                    // 没有「日历上多一条记录」的上下文可回。
+                    exercisePopToRoot()
+                },
+                onMinimize: { popExerciseOne() },
+                onEditConfig: { _ in
+                    // 自由训练草稿没有关联计划，不提供动作配置编辑
+                },
+                onRequestReplace: { _ in
+                    // 同上：自由训练从空开始，替换动作在训练页内完成
+                }
+            )
+
+        case .planDetail(let planID):
+            PlanDetailView(
+                repository: repository,
+                planID: planID,
+                onStartTraining: { _ in
+                    // 训练执行页尚未实现。这一路是从动作库进来的，
+                    // 保持留在计划详情页比跳到占位页更合理。
+                },
+                onOpenExerciseConfig: { entry in
+                    try? repository.updatePlanExercise(entry, inPlan: planID)
+                },
+                onAddExercise: { _ in
+                    viewModel.reloadAfterExternalChange()
+                    exercisePopToRoot()
+                },
+                onReplaceExercise: { _ in },
+                onOpenPlan: { copyID in
+                    path.append(ExerciseRoute.planDetail(copyID))
+                },
+                onDeleted: {
+                    popExerciseOne()
+                }
+            )
         }
+    }
+
+    /// 清空整栈 + 让动作库重新读盘。
+    ///
+    /// 「训练结束 / 删除自定义动作 / 从动作库往计划加动作」这三处都要
+    /// 「回到动作库根页并刷新」。原来三处各自重复写
+    /// `path = NavigationPath()` + `viewModel.reloadAfterExternalChange()`，
+    /// 抽出来保证只有一个写法。
+    private func exercisePopToRoot() {
+        path = NavigationPath()
+        viewModel.reloadAfterExternalChange()
     }
 }
 
