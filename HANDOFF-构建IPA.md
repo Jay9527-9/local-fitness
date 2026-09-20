@@ -1,8 +1,7 @@
-# 交接文档：把 FitnessApp 推到 GitHub 并构建未签名 IPA
+# 交接文档：FitnessApp 未签名 IPA 构建
 
-> 本文件是给另一个 AI 助手（或稍后的你自己）的执行说明书。
-> 目标只有一个：**产出一个可安装到 iOS 16.3.1 的未签名 IPA**。
-> 代码、门禁、文档、git 仓库**全部已就绪**，只剩「推送 + 触发 CI」这两步。
+> **本文件记录当前真实进度。** 目标只有一个：产出一个可安装到 iOS 16.3.1 的未签名 IPA。
+> **仓库已推送、CI 已跑通门禁链、只剩「编译器不再报错 → 出 IPA」这一步。**
 
 ---
 
@@ -11,11 +10,11 @@
 这是一个**离线优先的中文健身记录 App**，从 `训记.ipa` 逆推信息架构后独立实现。
 - 用途：**个人自用**，通过 TrollStore 侧载到 iPhone，不上架 App Store
 - 目标设备：**iOS 16.3.1**
-- 代码规模：94 个 `.swift` 文件，2842 个已跟踪文件，`Resources/ExerciseMedia/` 有 2649 个媒体文件（约 131 MB）
+- 代码规模：94 个 `.swift` 文件，`Resources/ExerciseMedia/` 有 2648 个媒体文件（约 131 MB）
 - 技术栈：SwiftUI + `NavigationStack` + `ObservableObject`，本地 JSON 持久化，零第三方依赖，零网络
 
 **核心约束（不可违反）**：目标 iOS 16.0 / 实机 16.3.1，所以**不得引入任何 iOS 16.4+ 或 17+ API**。
-特别点名：`scrollBounceBehavior`（整个修饰符都算 16.4+）、`presentationBackground`、
+特别点名：`scrollBounceBehavior`（**整个修饰符都算 16.4+**）、`presentationBackground`、
 `containerRelativeFrame`、`scrollTargetBehavior`、`scrollPosition`、`sensoryFeedback`、
 `ContentUnavailableView`、`@Observable`、`@Bindable`、`#Predicate`、SwiftData 全家桶。
 `.navigationBarHidden(true)` 是**必须保留**的（已废弃，但是 iOS 16.0 可用的唯一写法；
@@ -23,180 +22,192 @@
 
 ---
 
-## 二、当前状态（已完成的 vs 待做的）
+## 二、当前状态
 
 ### ✅ 已完成
 
 | 项 | 状态 |
 |---|---|
-| 代码 | 页面 01–15 + 页面 51 全部实现 |
-| 静态门禁 | preflight + lint + 87 个审计/推演脚本，**全绿** |
-| git 仓库 | 已 `git init`，分支 `main`，2 个提交 |
-| 提交哈希 | `f6aad4c`（最新）、`682a63e` |
-| 工作区 | **干净**（`git status --porcelain` 为空） |
-| 媒体 | 2649 个文件**已提交进仓库** |
-| CI 工作流 | `.github/workflows/build-ipa.yml` 已写好并在本地提交 |
-| 构建脚本 | `Tools/build_ipa.sh` 已写好（含完整门禁链） |
+| 代码 | 页面 01–15 + 页面 31/51 全部实现 |
+| 本地静态门禁 | **六层**，86 个脚本全绿（见 §三） |
+| git 仓库 | 已推送 GitHub，分支 `main` |
+| 仓库地址 | https://github.com/Jay9527-9/local-fitness |
+| 媒体 | 2648 个文件已提交进仓库 |
+| CI 工作流 | `.github/workflows/build-ipa.yml`，**13 个 step**，`push` 与 `workflow_dispatch` 双触发 |
+| 构建脚本 | `Tools/build_ipa.sh`（含完整门禁链） |
 | `.gitattributes` | 已加，媒体标记为 `binary`（防 GIF 被行尾转换损坏） |
 
-### ⬜ 待做（只有这两步）
+### ⬜ 待做
 
-1. **在 GitHub 建仓库并推送** —— 本地 `git remote` **为空**，从未推过任何东西
-2. **触发 Actions 构建，下载 IPA**
+1. **等 CI 的 `Build IPA` step 通过** —— 正在迭代编译器错误
+2. **下载 `FitnessApp-unsigned-ipa` 构件**
+3. **在 iOS 16.3.1 设备上用 TrollStore 安装**
+4. **撤销已明文共享的 PAT**：https://github.com/settings/tokens
 
 ---
 
-## 三、环境事实（这台机器上的实际情况）
+## 三、六层本地门禁（Windows 上没有 Swift 编译器，全靠这个）
+
+```
+Tools/preflight.py                     L1  iOS 版本 / plist / 工程声明 / 协议一致性 / 资源
+Tools/lint_swift.py                    L2  括号平衡 / 458 个自定义类型 / 未知类型 / 重复定义
+Tools/audit_pageNN.py            ×41   L3  逐页规格审计
+Tools/probe_pageNN_semantics.py  ×46   L4  逐页纯值层语义推演
+Tools/audit_call_sites.py              L5  跨文件调用点参数/标签一致性 + viewModel.member 归属
+Tools/audit_body_size.py               L6  SwiftUI 视图体表达式规模（防类型检查器放弃）
+```
+
+六层跑完：
+
+```bash
+cd "C:/Users/yangj/WorkBuddy/2026-09-19-12-55-00/FitnessApp"
+python Tools/preflight.py
+python Tools/lint_swift.py
+python Tools/audit_call_sites.py
+python Tools/audit_body_size.py
+for f in Tools/audit_page*.py Tools/probe_page*_semantics.py; do python "$f" || echo "FAIL $f"; done
+```
+
+**第 4 层抓出过 7 个真 bug，第 5 层抓出过 `viewModel.paceSecondsPerKm` 不存在，
+第 6 层抓出过四个 Tab 的超大 `body`。** 报红时**先读源码确认行为，再决定改代码还是改断言** ——
+历史上门禁首跑失败里相当一部分是断言自己写歪了。
+
+---
+
+## 四、环境事实（这台机器上的实际情况）
 
 | 项 | 值 |
 |---|---|
 | 项目路径 | `C:\Users\yangj\WorkBuddy\2026-09-19-12-55-00\FitnessApp` |
 | 系统 | Windows（用户 `yangj`） |
-| Git | `C:\Program Files\Git\cmd\git.exe`（**新装的，2.55.0.windows.3**） |
-| GitHub CLI | `C:\Program Files\GitHub CLI\gh.exe`（2.100.0，**未登录**） |
-| Python | `C:\Users\yangj\.workbuddy\binaries\python\versions\3.13.12\python.exe` |
-| `xcodebuild` / `swift` / `xcrun` | **不存在** —— 所以本地**绝对无法**产出 IPA |
+| Git | `git` 在 PATH 的 `/c/Program Files/Git/cmd`，**须显式加进 PATH** |
+| GitHub CLI | `gh`，用 `GH_TOKEN` 环境变量认证 |
+| Python | `python`（3.13.12） |
+| `xcodebuild` / `swift` / `xcrun` | **不存在** —— 本地**绝对无法**产出 IPA |
 
-### ⚠️ 网络问题（这是当前唯一的拦路虎）
+### ⚠️ 三个必须知道的环境陷阱
 
-这台机器的网络环境里有**两个代理端口**，其中一个走不通 GitHub：
+**1. Git Bash 的 PATH 是坏的**
+
+每次调用都要先补 PATH，否则 `tail` / `head` / `ls` / `dirname` / `git` 全部
+`command not found`：
+
+```bash
+export PATH="/usr/bin:/bin:/c/Program Files/Git/cmd:$PATH"
+```
+
+`cd` 在 Bash 工具里**不持久**，一律用绝对路径。
+
+**2. 代理：两个端口，只有一个通**
 
 | 代理 | 地址 | 能否访问 `github.com` |
 |---|---|---|
-| WorkBuddy 的代理 | `127.0.0.1:50096` | ❌ 不通 |
-| 用户的代理软件 | `127.0.0.1:10808` | ✅ **通**（已验证） |
+| WorkBuddy 的 | `127.0.0.1:50096` | ❌ 不通 |
+| 用户自己的 | `127.0.0.1:10808` | ✅ **通** |
 
-**症状**：环境变量里 `HTTPS_PROXY=http://127.0.0.1:50096`，导致 `gh` 连
-`https://github.com/login/device/code` 时超时：
-
-```
-failed to authenticate via web browser: Post "https://github.com/login/device/code":
-dial tcp 192.168.x.x:55651->20.205.243.166:443: A connection attempt failed ...
-host has failed to respond.
+```bash
+export HTTP_PROXY=http://127.0.0.1:10808
+export HTTPS_PROXY=http://127.0.0.1:10808
+export NO_PROXY= no_proxy=      # 必须清空，否则代理被绕过
 ```
 
-**已验证的事实**：
-- `api.github.com` 直连能通，但 `github.com` 直连**超时**
-- 走 `10808` 代理访问 `https://github.com/login/device/code` 能得到 HTTP 响应（网络链路通）
-- git 的全局配置里 `http.proxy` / `https.proxy` **本来就是 `127.0.0.1:10808`**，是对的
+**3. `git push` 假死（踩过两次，一共耗掉近 20 分钟）**
 
-**结论**：只要在执行 `gh` / `git push` 的窗口里把 `HTTPS_PROXY` 覆盖成 `10808` 即可。
+- 症状：`git push` 后台跑 14 分 39 秒零输出。**不是仓库大在慢传**，
+  是 TLS 握手从未成功、git 在无限重试。
+- 诊断：`timeout 60 git ls-remote origin` 秒拿到真实错误
+  `schannel: SEC_E_ILLEGAL_MESSAGE (0x80090326)`。
+- 根因：Git for Windows 默认 `http.sslbackend=schannel`，它会强制联网做证书
+  吊销检查（CRL/OCSP），代理下走不通。
+- 修法（**`.git/config` 里已有，无需重做**）：
+
+  ```bash
+  git config --unset-all http.sslbackend   # 先全清！见下
+  git config http.sslbackend openssl
+  git config http.postBuffer 524288000
+  git config http.version HTTP/1.1
+  ```
+
+- **暗坑**：`git config http.sslbackend openssl` 执行两次会**追加而非覆盖**，
+  于是 `ls-remote` 能过、`push` 却报 `SSL routines::ssl/tls alert handshake failure`。
+  改配置前先 `--unset-all`。查重复键：
+
+  ```bash
+  python -c "import re,collections;t=open('.git/config',encoding='utf-8').read();k=re.findall(r'^\s*([A-Za-z0-9_.-]+)\s*=',t,re.M);print({a:b for a,b in collections.Counter(k).items() if b>1})"
+  ```
+
+- **纪律**：push 超过 2 分钟无输出（连 `Enumerating objects` 都没有）立刻杀掉排查。
+
+### 取 CI 日志
+
+`gh run view --log` 常因 TLS 失败（`unexpected EOF`）。用 `curl` 打 API 拿纯文本：
+
+```bash
+curl -s --ssl-no-revoke -x http://127.0.0.1:10808 \
+  -H "Authorization: Bearer $GH_TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/Jay9527-9/local-fitness/actions/jobs/<job_id>/logs"
+```
+
+`curl` 是 Windows 自带的、同样走 schannel，所以**必须加 `--ssl-no-revoke`**。
+Python 里用 `subprocess` 调 curl 时**不要加 `text=True`**（stderr 含非 UTF-8 字节会
+`UnicodeDecodeError`）。
 
 ---
 
-## 四、执行步骤（照抄即可）
+## 五、执行步骤
 
-### 步骤 1：登录 `gh`（在 Git Bash 里）
+### 步骤 1：本地跑门禁
 
-打开 **Git Bash**（开始菜单搜「Git Bash」），**逐行**粘贴回车（不要一次粘多行，
-Git Bash 的多行粘贴会被拆坏；用右键 Paste 或 Shift+Insert 更稳）：
+见 §三。**六层全绿再推**，否则 CI 会在第 5–9 步白跑一遍。
 
-```bash
-export HTTPS_PROXY=http://127.0.0.1:10808
-export HTTP_PROXY=http://127.0.0.1:10808
-gh auth login
-```
-
-`gh auth login` 的四个选择（方向键 + Enter）：
-
-| 提示 | 选 |
-|---|---|
-| Where do you use GitHub? | **GitHub.com** |
-| What is your preferred protocol for Git operations? | **HTTPS** |
-| Authenticate Git with your GitHub credentials? | **Yes** |
-| How would you like to authenticate GitHub CLI? | **Login with a web browser** |
-
-出现 8 位一次性代码（形如 `AB12-CD34`）时：
-1. **先用鼠标复制那个代码**（按 Enter 会立刻打开浏览器，来不及复制）
-2. 再按 Enter
-3. 浏览器里粘贴代码 → 点 **Authorize github**
-
-成功标志：`✓ Logged in as <用户名>`
-
-**备选方案（如果浏览器授权始终失败）**：让用户去
-https://github.com/settings/tokens 建一个 **Classic Personal Access Token**，
-勾选 `repo` + `workflow` 两个 scope，然后：
+### 步骤 2：推送
 
 ```bash
-export GH_TOKEN=<粘贴token>
-gh auth status        # 应该显示已登录
+export PATH="/usr/bin:/bin:/c/Program Files/Git/cmd:$PATH"
+cd /c/Users/yangj/WorkBuddy/2026-09-19-12-55-00/FitnessApp
+export HTTP_PROXY=http://127.0.0.1:10808 HTTPS_PROXY=http://127.0.0.1:10808 NO_PROXY= no_proxy=
+timeout 120 git push origin HEAD:main
 ```
 
-### 步骤 2：建仓库并推送
+push 到 `main` 会**自动触发** CI（workflow 里有 `on: push: branches: [main]`）。
+正常耗时 **约 11 秒**。
 
-**推荐用一条命令搞定建仓库 + 推送**（`gh repo create` 支持 `--source` 直接关联本地仓库）：
+### 步骤 3：监控
 
 ```bash
-cd "C:/Users/yangj/WorkBuddy/2026-09-19-12-55-00/FitnessApp"
-
-export HTTPS_PROXY=http://127.0.0.1:10808
-export HTTP_PROXY=http://127.0.0.1:10808
-
-gh repo create local-fitness --public --source=. --remote=origin --push
+export GH_TOKEN=<token>
+gh run list --limit 5
+gh run view <run-id> --json status,conclusion -q '.status+" "+(.conclusion//"-")'
 ```
 
-参数说明：
-- `local-fitness` 是仓库名，可改成任意名字
-- `--public` 公开仓库（**Actions 免费不限时长**，推荐）
-  若要私有，改 `--private`（每月 2000 分钟免费额度，一次构建约 10 分钟，够用很久）
-- `--source=.` 用当前目录作为源
-- `--remote=origin` 自动配好 remote
-- `--push` 建完立即推送
-
-**这一步会传约 131 MB**（`.git` 目录 123 MB + 工作区），耗时取决于代理速度，
-几分钟到十几分钟都正常。**不要中断。**
-
-> 如果 `gh repo create --push` 失败，退化成手动两步：
-> ```bash
-> gh repo create local-fitness --public          # 只建仓库
-> git remote add origin https://github.com/<用户名>/local-fitness.git
-> git push -u origin main
-> ```
-> 注意 `git remote add` 之前先确认没有同名 remote：`git remote -v`（当前应为空）。
-
-### 步骤 3：触发构建
-
-```bash
-gh workflow run build-ipa.yml --ref main -f configuration=Release
-```
-
-然后盯着状态（`gh run watch` 实时刷新，或 `gh run list` 看一眼）：
-
-```bash
-gh run list --workflow=build-ipa.yml --limit 3
-gh run watch          # 实时跟随，Ctrl-C 退出
-```
-
-**工作流做了什么**（`.github/workflows/build-ipa.yml`，11 个 step，runner `macos-14`）：
+**工作流 13 个 step**（runner `macos-14`）：
 
 1. Checkout
 2. 选最新 Xcode
 3. 装 `xcodegen` 和 `ldid`
-4. 准备媒体资源（媒体数 < 2648 才下载；本仓库已全量提交，会直接跳过）
-5. 校验资源完整性（`Tools/verify_resources.py`）
-6. **预检**（`Tools/preflight.py`）—— iOS 版本 / plist / 工程声明 / 协议一致性
-7. **Swift 结构检查**（`Tools/lint_swift.py`）
-8. **规格审计 + 值语义推演**（全部 87 个脚本，任一失败即中止）
-9. 展示仓库布局（调试用）
-10. 构建 IPA（`./Tools/build_ipa.sh Release`）
-11. 上传 Artifact + 写 Summary
+4. 准备媒体资源（媒体数 < 2648 才下载；已全量提交会跳过）
+5. Preflight checks（L1）
+6. Swift structure lint（L2）
+7. Call-site consistency（L5）
+8. View body size（L6）
+9. Spec audits and value-layer probes（L3+L4，83 个脚本）
+10. Show repo layout
+11. **Build IPA**（`./Tools/build_ipa.sh Release`）
+12. Upload IPA
+13. Summary
 
-预计 **10 分钟左右**（首次会久一些，装依赖 + 编译 94 个文件 + 打包 131 MB 媒体）。
+首次约 10 分钟。**第 11 步是唯一会产生编译错误的地方。**
 
 ### 步骤 4：下载 IPA
 
 ```bash
-# 列出该次运行的 artifacts
-gh run view --json databaseId,conclusion,status
-
-# 下载（用上面拿到的 run id）
 gh run download <run-id> --name FitnessApp-unsigned-ipa --dir ./ipa-out
 ```
 
-或者直接走网页：仓库页 → Actions → 点进那次运行 → 页面底部 **Artifacts** 区
-→ 下载 `FitnessApp-unsigned-ipa`（保留 30 天）。
+或走网页：仓库页 → Actions → 点进那次运行 → 底部 **Artifacts** → `FitnessApp-unsigned-ipa`（保留 30 天）。
 
-产物文件名为 **`FitnessApp-unsigned.ipa`**。
+产物文件名 **`FitnessApp-unsigned.ipa`**。
 
 ### 步骤 5：安装到 iPhone（用户自己操作）
 
@@ -211,63 +222,95 @@ TrollStore 走 CoreTrust 漏洞做 perma-sign，**要求 IPA 未签名** ——
 
 ---
 
-## 五、关键文件清单
+## 六、关键文件清单
 
 | 文件 | 作用 |
 |---|---|
 | `project.yml` | XcodeGen 工程声明。`Resources/ExerciseMedia` **必须是 `type: folder`**，否则 Bundle 内子目录被打平 |
 | `FitnessApp/Info.plist` | 最低 iOS 16.0、深色锁定、仅竖屏 arm64、无网络权限 |
-| `Tools/build_ipa.sh` | 一键构建。内部先跑 preflight + lint + 全部 87 个审计推演脚本，失败即中止 |
-| `Tools/preflight.py` | 硬门禁：iOS 版本 / plist / 工程声明 / 资源完整性 / 协议一致性 |
-| `Tools/lint_swift.py` | 结构检查：括号平衡 / 顶层类型重复定义 / 未知类型引用 |
-| `Tools/audit_pageNN.py` | 逐页规格审计（页面 07–51，共 41 个） |
-| `Tools/probe_pageNN_semantics.py` | 逐页值语义推演（46 个） |
-| `.github/workflows/build-ipa.yml` | GitHub Actions 工作流（`workflow_dispatch`，手动触发） |
-| `Tools/push_and_build.sh` | 一键推送到已有仓库 + 触发构建（需要先有 remote） |
+| `Tools/build_ipa.sh` | 一键构建。内部先跑全部门禁脚本，失败即中止 |
+| `Tools/preflight.py` | L1 硬门禁 |
+| `Tools/lint_swift.py` | L2 结构检查 |
+| `Tools/audit_pageNN.py` | L3 逐页规格审计（41 个） |
+| `Tools/probe_pageNN_semantics.py` | L4 逐页值语义推演（46 个） |
+| `Tools/audit_call_sites.py` | L5 跨文件调用点一致性 |
+| `Tools/audit_body_size.py` | L6 视图体规模 |
+| `.github/workflows/build-ipa.yml` | GitHub Actions 工作流（13 步） |
 | `.gitattributes` | 媒体标 `binary`，文本统一 `eol=lf` |
-| `README.md` | 完整工程说明书（3187 行），§二 就是 IPA 打包指引 |
+| `README.md` | 完整工程说明书，§二 是 IPA 打包指引 |
 
 ---
 
-## 六、重要陷阱（踩过的坑，别重复踩）
+## 七、重要陷阱（踩过的坑，别重复踩）
 
-### 1. 多行粘贴会坏
+### 1. `error: failed to produce diagnostic for expression` = 类型检查器**放弃**
+
+它**不是语法错误**，只指出 `var body` 那一行，不给原因。根因是**单个表达式太大**。
+
+**关键副作用：编译器放弃后，同一批编译里后续的错误不再报。** 于是很多真错误被
+"掩盖"到下一轮才暴露。本项目实测：修掉四个 Tab 的巨型 `body` 之后，**下一轮冒出 11 个
+既有 bug**（`popOne` 不存在、`Double?` 未解包、实参顺序错……）。
+
+**修法**：把大表达式拆成小方法 —— `body` → `navHost`（导航宿主）+
+`xxxDestination(for:)`（路由分派）+ 弹出层。**不要用 `AnyView` 去"压"类型**。
+用量化工具找靶子，不要靠猜：
+
+```bash
+python Tools/audit_body_size.py --list    # 列最大的 15 个，不判红
+```
+
+阈值 `7000 字符 / 40 层大括号`，实测踩雷点是 `10821 / 66`。
+
+### 2. 一次编译报红消失 ≠ 修干净
+
+见上条。修完一轮要**按同类全仓扫描**，不要只修报出的那一处。
+本轮就是这么找出 `FormatterKit.distance(meters:)` 的另外 4 处同类调用的。
+
+### 3. `private` 方法的作用域是**类型本身**
+
+同一个文件里另一个 `struct` 的同名方法**不可见**。四个 Tab 各自需要自己的
+`popOne` / `popExerciseOne` / `lookupExerciseName`。这类"方法不存在"的错误，
+在巨型 `body` 拆开之前**根本不会被报出来**。
+
+### 4. 闭包参数显式标注类型可消除 `type of expression is ambiguous`
+
+当构造一个有 8 个闭包的视图、其中一个闭包内还要 `switch` 枚举时，推断规模叠加会失败。
+写 `{ (state: TodayTrainingState) in }` 就给了一个锚点。
+
+### 5. 多行粘贴会坏
+
 Git Bash 里一次粘贴多行会被拆成乱码（实测粘贴三行只剩 `\M`）。
 **逐行粘，或用右键 Paste / Shift+Insert。**
 
-### 2. 代理必须显式指定
-`export HTTPS_PROXY=http://127.0.0.1:10808` 只在**当前窗口**有效。
-每开一个新窗口都要重设。`gh` 和 `git push` 都需要。
+### 6. 别动 `git config` 的代理
 
-### 3. 别动 `git config` 的代理
 全局配置里 `http.proxy=http://127.0.0.1:10808` 是**正确的**，不需要改。
 冲突的是**环境变量** `HTTPS_PROXY`（值是 50096），用 `export` 临时覆盖即可。
 
-### 4. 本机绝不可能出 IPA
+### 7. 本机绝不可能出 IPA
+
 没有 `xcodebuild` / `swift`，iOS 二进制只能在 macOS + Xcode 上编译。
 任何声称「在 Windows 上本地编译出 IPA」的方案都是错的。
 
-### 5. 不要「优化」`.gitattributes`
-媒体文件（2649 个 JPG/GIF）必须标记为 `binary`。去掉之后 git 会尝试做行尾
-转换，**GIF 会被损坏**，App 里动作演示动画全废。
+### 8. 不要「优化」`.gitattributes`
 
-### 6. 不要在 Windows 上用 shell heredoc 写含反引号的文件
-被命令替换吃掉，会写进一堆乱码（本项目实际踩过，日志被污染过一次）。
-用带 `encoding='utf-8'` 的 Python 脚本写文件，路径写死在脚本里，不经 shell。
+媒体文件（2648 个 JPG/GIF）必须标记为 `binary`。去掉之后 git 会尝试做行尾转换，
+**GIF 会被损坏**，App 里动作演示动画全废。
 
-### 7. 构建失败时的第一反应
-CI 里任何一个门禁脚本报红都会中止构建。**先读源码确认行为，再决定改代码还是改断言** ——
-本项目历史上门禁首跑失败 20+ 次，绝大多数是**断言自己写歪了**，代码本身是对的。
-只有第 4 层「值语义推演」抓出过 7 个真 bug。
+### 9. 不要用 shell heredoc 写含反引号的文件
+
+被命令替换吃掉，会写进一堆乱码。用带 `encoding='utf-8'` 的 Python 脚本写文件，
+路径写死在脚本里，不经 shell。
+
+### 10. `/tmp` 在 Windows 不存在
+
+输出重定向到 `/tmp` 会失败，并**掩盖脚本的真实 exit code**。用工作目录下的绝对路径。
 
 ---
 
-## 七、验收标准
+## 八、验收标准
 
-任务完成的最低标准：
-
-- [ ] `gh auth status` 显示已登录，账号是用户的
-- [ ] 远程仓库存在，且 `git ls-remote origin main` 能返回 `main` 的哈希
+- [ ] `git ls-remote origin main` 返回 `main` 的哈希
 - [ ] Actions 运行结束，`conclusion == "success"`
 - [ ] 下载到的 `FitnessApp-unsigned.ipa` 存在且体积合理（约 130–160 MB）
 - [ ] IPA 内 `Payload/FitnessApp.app/` 下有 `FitnessApp` 可执行文件、`Info.plist`、
@@ -277,13 +320,14 @@ CI 里任何一个门禁脚本报红都会中止构建。**先读源码确认行
 
 ---
 
-## 八、给接手 AI 的一句话总结
+## 九、给接手 AI 的一句话总结
 
 > 项目在 `C:\Users\yangj\WorkBuddy\2026-09-19-12-55-00\FitnessApp`，
-> git 仓库已就绪（分支 `main`，提交 `f6aad4c`，2842 个文件已提交，remote 为空）。
-> 用 `C:\Program Files\GitHub CLI\gh.exe` 建仓库并推送，
-> **执行前必须在窗口里 `export HTTPS_PROXY=http://127.0.0.1:10808`**（环境变量默认的
-> 50096 端口走不通 GitHub，10808 才通）。推送约 131 MB。
-> 然后 `gh workflow run build-ipa.yml --ref main -f configuration=Release`，
-> 约 10 分钟后从 artifact `FitnessApp-unsigned-ipa` 取回 `FitnessApp-unsigned.ipa`。
+> 已推到 https://github.com/Jay9527-9/local-fitness（分支 `main`），
+> push 到 `main` 即自动触发 CI。**六个 step 是本地门禁的镜像，第 11 步才是真编译。**
+> 报 `failed to produce diagnostic for expression` 时不要看那一行 —— 用
+> `python Tools/audit_body_size.py --list` 找过大的 `body`，拆它；拆完会冒出被掩盖的
+> 既有错误，**按同类全仓扫描**一起修。
+> 每次调 Bash 都要 `export PATH="/usr/bin:/bin:/c/Program Files/Git/cmd:$PATH"`，
+> 联网要 `export HTTPS_PROXY=http://127.0.0.1:10808 NO_PROXY=`。
 > 这台机器没有 `xcodebuild`，本地不可能出包。

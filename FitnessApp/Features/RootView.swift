@@ -340,9 +340,13 @@ private struct ProfileTab: View {
         }
     }
 
-    /// 我的页路由分派。19 个 case 全部只做「构造子页 + 接回调」，
-    /// 每个 case 的检查规模都很小；真正复杂的（计划详情 / 执行页）
-    /// 已经拆成独立方法。
+    /// 我的页路由分派。19 个 case 全部只做「构造子页 + 接回调」。
+    ///
+    /// **单个 case 里闭包多的（≥4 个），一律拆成独立方法。**
+    /// 分派方法本身是一个巨大的 `switch`，每个 case 的类型推理会累积到
+    /// 整个表达式上；`sessionDraft` 那种「5 个闭包 + 每个闭包里还有
+    /// `guard` / 多语句」的 case 内联进来，会让整个 `switch` 报
+    /// `type of expression is ambiguous` —— 而且错误指在别处。
     @ViewBuilder
     private func profileDestination(for route: ProfileRoute) -> some View {
         switch route {
@@ -370,25 +374,7 @@ private struct ProfileTab: View {
             )
 
         case .planList:
-            PlanListView(
-                repository: repository,
-                onOpenPlan: { plan in
-                    path.append(ProfileRoute.planDetail(plan.id))
-                },
-                onStartTraining: { plan in
-                    startPlanDraft(plan)
-                },
-                onNewPlan: {
-                    showNewPlanSheet = true
-                },
-                onImportBackup: {
-                    showPlanImporter = true
-                },
-                onBack: {
-                    popOne()
-                    profileReloadToken = UUID()
-                }
-            )
+            profilePlanListView
 
         case .planDetail(let planID):
             planDetailView(planID: planID)
@@ -404,79 +390,19 @@ private struct ProfileTab: View {
             )
 
         case .sessionDraft(let sessionID):
-            WorkoutSessionView(
-                repository: repository,
-                sessionID: sessionID,
-                onFinished: { finished in
-                    path.append(ProfileRoute.sessionSummary(finished.id))
-                },
-                onMinimize: {
-                    popOne()
-                },
-                onEditConfig: { entry in
-                    guard let planID = try? repository.fetchSession(id: sessionID)?.planID else { return }
-                    path.append(ProfileRoute.exerciseConfig(planID: planID, entry: entry))
-                },
-                onRequestReplace: { card in
-                    pickerContext = ExercisePickerContext(
-                        planID: nil,
-                        replacingEntryID: nil,
-                        sessionID: sessionID,
-                        replacingExerciseID: card.exerciseID
-                    )
-                    showExercisePicker = true
-                }
-            )
+            profileSessionDraftView(sessionID: sessionID)
 
         case .sessionSummary(let sessionID):
-            SessionSummaryView(
-                repository: repository,
-                sessionID: sessionID,
-                onDone: {
-                    popToRoot()
-                    profileReloadToken = UUID()
-                },
-                onOpenHistory: {
-                    // 跨 Tab 到历史栏定位本次训练，交给 RootView 处理。
-                    popToRoot()
-                    onOpenHistory(sessionID)
-                }
-            )
+            profileSessionSummaryView(sessionID: sessionID)
 
         case .favorites:
-            FavoriteExercisesView(
-                repository: repository,
-                onBack: { popOne() },
-                onOpenExercise: { item in
-                    onOpenExerciseDetail(item)
-                },
-                onBrowseExercises: {
-                    onBrowseExercises()
-                }
-            )
+            profileFavoritesView
 
         case .trainingPreferences:
             TrainingPreferencesView(onBack: { popOne() })
 
         case .appSettings:
-            AppSettingsView(
-                onBack: {
-                    popOne()
-                    profileReloadToken = UUID()
-                },
-                onOpenUnits: {
-                    path.append(ProfileRoute.unitSettings)
-                },
-                onOpenSoundAndHaptics: {
-                    path.append(ProfileRoute.soundAndHaptics)
-                },
-                onOpenReduceMotion: {
-                    path.append(ProfileRoute.reduceMotion)
-                },
-                onOpenPermissions: {
-                    path.append(ProfileRoute.permissions)
-                }
-            )
+            profileAppSettingsView
 
         case .unitSettings:
             UnitSettingsView(onBack: { popOne() })
@@ -491,26 +417,7 @@ private struct ProfileTab: View {
             PermissionSettingsView(onBack: { popOne() })
 
         case .dataManagement:
-            WorkoutDataManagementView(
-                viewModel: WorkoutDataManagementViewModel(repository: repository),
-                onBack: {
-                    popOne()
-                    profileReloadToken = UUID()
-                },
-                onDataChanged: { profileReloadToken = UUID() },
-                onOpenExportBackup: {
-                    path.append(ProfileRoute.exportBackup)
-                },
-                onOpenImportBackup: {
-                    path.append(ProfileRoute.importBackup)
-                },
-                onOpenClearRecords: {
-                    path.append(ProfileRoute.clearRecords)
-                },
-                onOpenClearAll: {
-                    path.append(ProfileRoute.clearAllData)
-                }
-            )
+            profileDataManagementView
 
         case .exportBackup:
             ExportBackupView(
@@ -565,6 +472,164 @@ private struct ProfileTab: View {
     private func popOne() {
         guard !path.isEmpty else { return }
         path.removeLast()
+    }
+
+    /// 我的页里的训练执行页（页面 05 / 31 分派）。
+    ///
+    /// 从 `profileDestination(for:)` 的 `.sessionDraft` 分支拆出来：
+    /// 那个 case 有 5 个闭包，其中一个带 `guard`，内联在 19 个 case 的
+    /// 巨型 `switch` 里会把整段表达式的检查规模推上去。
+    /// 这里也顺带把有氧 / 力量的分派收在一处。
+    @ViewBuilder
+    private func profileSessionDraftView(sessionID: UUID) -> some View {
+        if isCardioSession(sessionID) {
+            CardioSessionView(
+                repository: repository,
+                sessionID: sessionID,
+                onFinished: { finished in
+                    path.append(ProfileRoute.sessionSummary(finished.id))
+                },
+                onMinimize: {
+                    // 有氧页没有「草稿」概念，最小化等于退出。
+                    popOne()
+                }
+            )
+        } else {
+            WorkoutSessionView(
+                repository: repository,
+                sessionID: sessionID,
+                onFinished: { finished in
+                    path.append(ProfileRoute.sessionSummary(finished.id))
+                },
+                onMinimize: { popOne() },
+                onEditConfig: { entry in
+                    guard let planID = try? repository.fetchSession(id: sessionID)?.planID else { return }
+                    path.append(ProfileRoute.exerciseConfig(planID: planID, entry: entry))
+                },
+                onRequestReplace: { card in
+                    pickerContext = ExercisePickerContext(
+                        planID: nil,
+                        replacingEntryID: nil,
+                        sessionID: sessionID,
+                        replacingExerciseID: card.exerciseID
+                    )
+                    showExercisePicker = true
+                }
+            )
+        }
+    }
+
+    /// 该草稿是不是有氧训练。查不到草稿时按力量训练处理（执行页自己会兜底）。
+    private func isCardioSession(_ sessionID: UUID) -> Bool {
+        (try? repository.fetchSession(id: sessionID))??.kind == .cardio
+    }
+
+    // MARK: 我的页：闭包多的子页各自成方法
+    //
+    // 下面五个子页都有 4–7 个闭包。**内联在 `profileDestination(for:)` 里
+    // 会把那个巨型 `switch` 的检查规模推到阈值以上**，报出来的却是
+    // 别处的 `type of expression is ambiguous`。拆出来之后每个方法的
+    // 检查规模都是独立计算的，互不累加。
+
+    /// 我的计划（页面 15）。
+    private var profilePlanListView: some View {
+        PlanListView(
+            repository: repository,
+            onOpenPlan: { plan in
+                path.append(ProfileRoute.planDetail(plan.id))
+            },
+            onStartTraining: { plan in
+                startPlanDraft(plan)
+            },
+            onNewPlan: {
+                showNewPlanSheet = true
+            },
+            onImportBackup: {
+                showPlanImporter = true
+            },
+            onBack: {
+                popOne()
+                profileReloadToken = UUID()
+            }
+        )
+    }
+
+    /// 动作收藏。
+    private var profileFavoritesView: some View {
+        FavoriteExercisesView(
+            repository: repository,
+            onBack: { popOne() },
+            onOpenExercise: { item in
+                onOpenExerciseDetail(item)
+            },
+            onBrowseExercises: {
+                onBrowseExercises()
+            }
+        )
+    }
+
+    /// 应用设置。
+    private var profileAppSettingsView: some View {
+        AppSettingsView(
+            onBack: {
+                popOne()
+                profileReloadToken = UUID()
+            },
+            onOpenUnits: {
+                path.append(ProfileRoute.unitSettings)
+            },
+            onOpenSoundAndHaptics: {
+                path.append(ProfileRoute.soundAndHaptics)
+            },
+            onOpenReduceMotion: {
+                path.append(ProfileRoute.reduceMotion)
+            },
+            onOpenPermissions: {
+                path.append(ProfileRoute.permissions)
+            }
+        )
+    }
+
+    /// 数据管理（页面 10 的导出 / 导入 / 清除入口）。
+    private var profileDataManagementView: some View {
+        WorkoutDataManagementView(
+            viewModel: WorkoutDataManagementViewModel(repository: repository),
+            onBack: {
+                popOne()
+                profileReloadToken = UUID()
+            },
+            onDataChanged: { profileReloadToken = UUID() },
+            onOpenExportBackup: {
+                path.append(ProfileRoute.exportBackup)
+            },
+            onOpenImportBackup: {
+                path.append(ProfileRoute.importBackup)
+            },
+            onOpenClearRecords: {
+                path.append(ProfileRoute.clearRecords)
+            },
+            onOpenClearAll: {
+                path.append(ProfileRoute.clearAllData)
+            }
+        )
+    }
+
+    /// 训练总结页（页面 07）。两个出口都要清栈：总结页通常压在
+    /// 执行页之上，逐层弹出会在中间层触发多余的 onAppear 读盘。
+    private func profileSessionSummaryView(sessionID: UUID) -> some View {
+        SessionSummaryView(
+            repository: repository,
+            sessionID: sessionID,
+            onDone: {
+                popToRoot()
+                profileReloadToken = UUID()
+            },
+            onOpenHistory: {
+                // 跨 Tab 到历史栏定位本次训练，交给 RootView 处理。
+                popToRoot()
+                onOpenHistory(sessionID)
+            }
+        )
     }
 
     /// 清空整个栈，回到「我的」首页。
@@ -1237,11 +1302,21 @@ private struct TrainingTab: View {
     /// 栈底的训练首页。8 个闭包回调各自只有一两行，拆出来后
     /// TrainingHomeView 的构造不再是 `var body` 表达式的一部分。
     ///
-    /// **闭包参数显式标注类型**：`onStartTraining` 里要对枚举做 `switch`，
-    /// 若靠推断（`{ state in ... }`）编译器要先反推 `state` 的类型才能解析
-    /// 各个 `case`，而 `TrainingHomeView` 的构造又有 8 个闭包 —— 推断规模
-    /// 叠加后会报 `type of expression is ambiguous without a type annotation`。
-    /// 写上 `(state: TodayTrainingState)` 就给了锚点，问题消失。
+    /// **两个让类型检查器能算得动的写法，缺一不可：**
+    ///
+    /// 1. **闭包参数显式标注类型**。`onStartTraining` 里要对枚举做 `switch`，
+    ///    若靠推断（`{ state in ... }`）编译器要先反推 `state` 的类型才能解析
+    ///    各个 `case`；`TrainingHomeView` 的构造又有 8 个闭包，推断规模叠加后
+    ///    会报 `type of expression is ambiguous without a type annotation`。
+    ///    写上 `(state: TodayTrainingState)` 就给了锚点。
+    ///
+    /// 2. **不在这 8 个闭包里塞重活**。`onOpenCalendar` / `onOpenMore` 的声明
+    ///    类型是 `() -> Void`，闭包里只能放语句 —— 一旦把 `popOne` 改成
+    ///    返回 `some View`（比如返回一个跳转用的视图），这 8 个闭包的外部
+    ///    上下文就再也收敛不出 `Void`，整个构造报 ambiguous，
+    ///    而错误只会指在链尾的 `.navigationBarHidden(true)` 上，
+    ///    **看不见 `homeRoot` 这几个字**。保持 `{ }` 空实现 + 由
+    ///    `popToRoot()` 单独负责返回栈底，就永远不会踩到这个坑。
     private var homeRoot: some View {
         TrainingHomeView(
             viewModel: TrainingHomeViewModel(repository: repository),
@@ -1253,7 +1328,7 @@ private struct TrainingTab: View {
                     // App 被终止或用户最小化后重开：草稿还在磁盘上，
                     // 直接回到执行页接着练，不新建也不丢已完成的组。
                     path.append(TrainingRoute.sessionDraft(sessionID))
-                default:
+                case .loading, .empty:
                     break
                 }
             },
@@ -1268,8 +1343,10 @@ private struct TrainingTab: View {
                 // 首页最近训练就是后者的一个具体位置。
                 path.append(TrainingRoute.historyDetail(session.id))
             },
-            onOpenCalendar: { /* 待接入日历 / 计划 */ },
-            onOpenMore: { /* 待接入更多设置 */ },
+            // 日历页与「更多」菜单尚未接入，先留空实现。
+            // 不要在这里调用 `popOne()` —— 见上面的注释 2。
+            onOpenCalendar: { },
+            onOpenMore: { },
             onResumeSession: { (session: WorkoutSession) in
                 path.append(TrainingRoute.sessionDraft(session.id))
             },

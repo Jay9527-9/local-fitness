@@ -47,20 +47,32 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_ROOT = os.path.join(ROOT, "FitnessApp")
 
 # ---- 阈值 ----------------------------------------------------------------
-# 实测踩雷：10997 字符 / 66 层。取比它低一档，留余量。
-MAX_CHARS = 7000
+# 第一次实测踩雷：RootView 的 TrainingTab.body = 10997 字符 / 66 层。
+# 第二次实测踩雷：profileDestination(for:) = 7038 字符（@ViewBuilder 方法，
+#   19 个 case 的巨型 switch）—— 当时阈值正好是 7000，**擦边漏过**，
+#   结果 CI 报 `RootView.swift:1281 type of expression is ambiguous`。
+# 教训：阈值要离踩雷点足够远，不要「刚好卡住」。
+MAX_CHARS = 6000
 MAX_BRACES = 40
 
 # ---- 匹配 ----------------------------------------------------------------
-# 同时覆盖：
-#   var body: some View {
-#   @ViewBuilder var content: some View {
-#   private var navHost: some View {
-#   private var exercisePickerSheet: some View {
+# 同时覆盖**两类**返回 `some View` 的成员 —— 第二类是后来才补的：
+# 1) 属性：
+#      var body: some View {
+#      @ViewBuilder var content: some View {
+#      private var navHost: some View {
+# 2) 方法（**容易漏**）：
+#      @ViewBuilder private func xxxDestination(for:) -> some View {
+#      private func planDetailView(planID: UUID) -> some View {
+#    路由分派方法属于第 2 类。它们内部是一个巨大的 switch，
+#    每个 case 的类型推理会累积到**整个方法**上，
+#    最大的那几个正是踩雷点。
 SOME_VIEW = re.compile(
     r"^[ \t]*(?:@\w+(?:\([^)]*\))?\s+)*"          # 属性包装器（@ViewBuilder 等）
-    r"(?:(?:private|fileprivate|internal|public|open|final)\s+)*"
-    r"var\s+(\w+)\s*:\s*some\s+View\s*\{",
+    r"(?:(?:private|fileprivate|internal|public|open|final|static)\s+)*"
+    r"(?:var\s+(\w+)\s*:\s*some\s+View"
+    r"|func\s+(\w+)\s*(?:<[^>]*>)?\s*\([^)]*\)\s*->\s*some\s+View)"
+    r"\s*\{",
     re.M,
 )
 
@@ -136,13 +148,22 @@ def scan_file(path: str):
         seg = extract_body(src, brace)
         code = strip_comments(seg)
         out.append({
-            "name": m.group(1),
+            # 第 1 组是属性名，第 2 组是方法名
+            "name": m.group(1) or m.group(2),
+            "token": m.end(),
             "line": src[:brace].count("\n") + 1,
             "chars": len(code),
             "braces": code.count("{"),
             "path": path,
         })
-    return out
+    # 去重：同一个 `{` 只保留一处。属性与方法两组正则不太可能同时命中同一段，
+    # 但 `-> some View {` 后面紧跟换行再 `{` 的排版会命中两次 —— 取更长的那个。
+    dedup = {}
+    for r in out:
+        key = (r["path"], r["line"])
+        if key not in dedup or r["chars"] > dedup[key]["chars"]:
+            dedup[key] = r
+    return list(dedup.values())
 
 
 def collect():

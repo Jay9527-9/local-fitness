@@ -87,7 +87,9 @@ jobs:
           #   error: failed to produce diagnostic for expression
           # 且只指出 `var body` 那一行，前五层门禁全都看不见（括号平衡、
           # 类型存在、调用点齐全、值语义都对）。2026-09-20 第二次真编译
-          # 就是被 RootView 的 66 层大括号 body 挡住的。
+          # 就是被 RootView 的 66 层大括号 body 挡住的；
+          # 第三次是 @ViewBuilder 的 profileDestination(for:)（19 个 case 的
+          # switch）—— 说明**属性与方法两类都要量**，阈值也别贴着踩雷点取。
           python3 Tools/audit_body_size.py
 
       - name: Spec audits and value-layer probes

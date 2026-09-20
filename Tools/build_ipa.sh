@@ -70,6 +70,8 @@ fi
 # 视图体规模：单个 some View 表达式过大 → 类型检查器直接放弃。
 # 2026-09-20 第二次真编译就是被 RootView 的 66 层大括号 body 挡住的，
 # 前五层全绿也看不见（括号平衡、类型存在、调用点齐全、值语义都对）。
+# 第三次是 @ViewBuilder 的 profileDestination(for:)：**方法**也要量，
+# 而且阈值不能贴着踩雷点取（7000 时它 7038，擦边漏过）。
 if ! python3 Tools/audit_body_size.py; then
   echo "   !! 未通过: Tools/audit_body_size.py"
   GATE_FAIL=1
