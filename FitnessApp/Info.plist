@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>训练</string>
+	<key>CFBundleName</key>
+	<string>FitnessApp</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh_CN</string>
+	</array>
+
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
+
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>MinimumOSVersion</key>
+	<string>16.0</string>
+
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+
+	<!-- 页面 51 权限管理：本 App 只使用下面两项系统权限。
+	     相册仅用于从相册挑选一张照片作为本地头像；选图走 PhotosPicker，
+	     不需要预先申请完整相册权限，此说明用于系统在必要时展示。
+	     不申请定位、通讯录、蓝牙、麦克风、健康数据或网络权限，
+	     因此 plist 里没有对应的 UsageDescription 键。 -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择一张照片作为本地头像。照片只保存在本机，不会上传。</string>
+
+	<!-- 本地通知：仅用于 App 不在前台时提醒组间休息结束。
+	     权限在用户主动打开「休息结束提醒」时才申请，不在启动时弹窗。 -->
+</dict>
+</plist>

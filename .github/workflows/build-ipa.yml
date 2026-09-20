@@ -1,0 +1,123 @@
+name: Build unsigned IPA
+
+# 在 GitHub 托管的 macOS runner 上编译，产出未签名 IPA，供 TrollStore 侧载。
+# 手动触发：仓库 Actions → Build unsigned IPA → Run workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Build configuration'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+
+jobs:
+  build:
+    name: Build IPA on macOS
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          LATEST=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$LATEST" ]; then echo "No Xcode found"; exit 1; fi
+          echo "Using $LATEST"
+          sudo xcode-select -s "$LATEST/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install tooling
+        run: |
+          brew install xcodegen ldid
+          xcodegen --version
+          which ldid
+
+      - name: Prepare media assets
+        run: |
+          # 若仓库中未提交 130 MB 媒体（.gitignore 默认注释掉即可提交），
+          # 这里自动补齐，保证 IPA 内含全部动作图片与动画。
+          COUNT=$(find Resources/ExerciseMedia -type f 2>/dev/null | wc -l | tr -d ' ')
+          echo "当前媒体文件数: $COUNT"
+          if [ "$COUNT" -lt 2648 ]; then
+            echo "媒体不完整，开始下载…"
+            python3 Tools/download_media.py
+          fi
+          python3 Tools/verify_resources.py
+
+      - name: Preflight checks
+        run: |
+          # 硬性门禁：iOS 版本兼容性、Info.plist、工程声明、资源完整性。
+          # 目标设备 iOS 16.3.1，任何 iOS 17 专属 API 残留都会在此中断。
+          pip3 install --quiet pyyaml
+          python3 Tools/preflight.py
+
+      - name: Swift structure lint
+        run: python3 Tools/lint_swift.py
+
+      - name: Spec audits and value-layer probes
+        run: |
+          # 逐页跑规格审计与纯值层语义推演。本机无 Swift 编译器，
+          # 这两层是唯一能发现逻辑错误的防线（曾抓出 6 个真 bug）。
+          FAIL=0
+          for f in Tools/audit_page*.py; do
+            [ -e "$f" ] || continue
+            echo "--- $f"
+            python3 "$f" || FAIL=1
+          done
+          for f in Tools/probe_page*_semantics.py; do
+            [ -e "$f" ] || continue
+            echo "--- $f"
+            python3 "$f" || FAIL=1
+          done
+          [ "$FAIL" -eq 0 ] || { echo "!! 门禁未通过"; exit 1; }
+
+      - name: Show repo layout
+        run: |
+          find . -maxdepth 2 -not -path './.git*' | sort | head -40
+          echo "--- seed ---"
+          ls -lh Resources/exerciseLibrary.seed.json || echo "SEED MISSING"
+          echo "--- media ---"
+          du -sh Resources/ExerciseMedia 2>/dev/null || echo "MEDIA MISSING"
+
+      - name: Build IPA
+        run: |
+          chmod +x Tools/*.sh
+          ./Tools/build_ipa.sh "${{ github.event.inputs.configuration }}"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FitnessApp-unsigned-ipa
+          path: FitnessApp-unsigned.ipa
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          SIZE="$(du -h FitnessApp-unsigned.ipa | cut -f1)"
+          {
+            echo "## 构建完成"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 产物 | FitnessApp-unsigned.ipa |"
+            echo "| 体积 | $SIZE |"
+            echo "| 配置 | ${{ github.event.inputs.configuration }} |"
+            echo "| 最低系统 | iOS 16.0 |"
+            echo "| 签名 | 未签名（ldid 伪签名），TrollStore 设备端 perma-sign |"
+            echo ""
+            echo "### 安装步骤"
+            echo "1. 下载上方 Artifacts 中的 IPA"
+            echo "2. 传到 iPhone（AirDrop / 文件 App）"
+            echo "3. 用 TrollStore 打开并安装"
+            echo ""
+            echo "### 设备要求"
+            echo "- iOS 16.3.1 处于 TrollStore 2 的完整支持区间（15.6 – 16.5 全设备）"
+            echo "- TrollStore 需要未签名 IPA，本流程已满足"
+          } >> "$GITHUB_STEP_SUMMARY"

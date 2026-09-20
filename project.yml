@@ -1,0 +1,64 @@
+# XcodeGen 工程声明。在 macOS 上生成可编译的 Xcode 工程。
+# 参考：https://github.com/yonaskolb/XcodeGen
+
+name: FitnessApp
+options:
+  bundleIdPrefix: com.local.fitness
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    # 目标设备 iOS 16.3.1，README 里的 SwiftData 方案已换成 JSONFitnessRepository
+    SWIFT_VERSION: "5.7"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    # 关闭签名：产出未签名 IPA，交由 TrollStore 在设备端处理
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    # 仅 arm64：TrollStore 面向 arm64 设备，且能显著减小体积
+    ARCHS: "arm64"
+    ONLY_ACTIVE_ARCH: "NO"
+    ENABLE_BITCODE: "NO"
+    TARGETED_DEVICE_FAMILY: "1"
+    SUPPORTS_MACCATALYST: "NO"
+
+targets:
+  FitnessApp:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      # 1) 源码
+      - path: FitnessApp
+        excludes:
+          - "Resources/**"
+          - "Info.plist"
+          - "**/.DS_Store"
+      # 2) 动作库种子数据，作为普通资源。
+      #    注意：种子文件位于仓库根的 Resources/ 下，与 ExerciseMedia 同级。
+      - path: Resources/exerciseLibrary.seed.json
+        buildPhase: resources
+      # 3) 动作媒体。
+      #    type: folder 让 Xcode 以 folder reference（蓝色文件夹）处理，
+      #    Bundle 内原样保留 images/ 与 videos/ 子目录，与 ExerciseMedia.url(for:) 的查找路径一致。
+      - path: Resources/ExerciseMedia
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.fitness.trainnote
+        PRODUCT_NAME: FitnessApp
+        INFOPLIST_FILE: FitnessApp/Info.plist
+        GENERATE_INFOPLIST_FILE: "NO"
+        CODE_SIGN_ENTITLEMENTS: ""
+        SWIFT_STRICT_CONCURRENCY: minimal
+        # 再次显式关闭签名，避免被 target 层默认值覆盖
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGN_STYLE: Manual

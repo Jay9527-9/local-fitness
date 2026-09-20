@@ -1,0 +1,18 @@
+# 统一换行符，避免 Windows 与 macOS runner 之间来回转换产生的伪 diff。
+# 二进制媒体必须标记为 binary，否则 git 会尝试做行尾转换并损坏 GIF。
+* text=auto eol=lf
+
+*.swift   text eol=lf
+*.py      text eol=lf
+*.sh      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.md      text eol=lf
+*.json    text eol=lf
+*.plist   text eol=lf
+
+*.jpg     binary
+*.jpeg    binary
+*.png     binary
+*.gif     binary
+*.ipa     binary

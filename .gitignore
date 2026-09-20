@@ -1,0 +1,25 @@
+# macOS / Xcode
+.DS_Store
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+FitnessApp.xcodeproj/
+*.ipa
+out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 工具产物
+Tools/*.log
+*.part
+
+# 动作媒体
+# 若不想把 130 MB 媒体提交进仓库，取消下面两行注释，
+# 改为在 CI 里运行 `python Tools/download_media.py` 拉取。
+# Resources/ExerciseMedia/images/
+# Resources/ExerciseMedia/videos/

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 仅供 ldid 伪签名使用。
+	     未签名 IPA 由 TrollStore 在设备端做 perma-sign，此处不声明任何特权 entitlement，
+	     避免因权限不匹配导致安装或运行失败。 -->
+	<key>application-identifier</key>
+	<string>com.local.fitness.trainnote</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>LOCAL</string>
+	<key>get-task-allow</key>
+	<false/>
+	<key>platform-application</key>
+	<false/>
+</dict>
+</plist>
