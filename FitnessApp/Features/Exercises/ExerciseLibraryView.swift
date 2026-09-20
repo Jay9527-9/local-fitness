@@ -52,17 +52,30 @@ struct ExerciseLibraryView: View {
 
                 case .loaded:
                     recentSection
-                    resultsSection
+                    // 头部与列表拆成两个独立的直接子项。
+                    // 惰性只对 LazyVStack 的**直接子视图**生效，若把 1324 行
+                    // 包在一个 VStack 里交给它，首帧仍会全部建出来。
+                    resultsHeaderSection
+                    resultsListSection
                 }
             }
             .padding(.horizontal, DS.Spacing.page)
             .padding(.top, DS.Spacing.item)
+            // 底部留白 = 常规区间距 + 自绘 Tab 栏高度的一次性补偿。
+            // 外层 RootView 用 safeAreaInset(edge: .bottom) 挂了 Tab 栏，
+            // 系统已经把这个 inset 让给了 ScrollView，这里再补一点点视觉呼吸感即可。
             .padding(.bottom, DS.Spacing.section)
         }
         .background(DS.Palette.bg)
         .scrollDismissesKeyboard(.immediately)
         .safeAreaInset(edge: .top, spacing: 0) { navigationBar }
-        .safeAreaInset(edge: .bottom, spacing: 0) { pickingFooter }
+        // 挑选模式的提示条才需要占位。非挑选模式下**不能**挂一个空的
+        // safeAreaInset —— 它会在 Tab 栏之上再插一条零高度的 inset，
+        // 与 RootView 的 Tab 栏 inset 叠加后把内容顶出可视区，
+        // 表现就是「底栏挡住列表最后几行」。
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isPicking { pickingFooter }
+        }
         .task { await viewModel.load() }
         .bottomDrawer(isPresented: $showAdvancedFilter, height: 620) {
             ExerciseFilterDrawer(
@@ -172,19 +185,18 @@ struct ExerciseLibraryView: View {
 
     /// 挑选模式下的底部提示条。明确告诉用户「点一行就是选中它」，
     /// 否则用户会以为点进去是看详情。
-    @ViewBuilder
+    /// 调用点已用 if 判过 isPicking，这里不再返回空分支 ——
+    /// 空分支会让 safeAreaInset 白白占掉一条 inset。
     private var pickingFooter: some View {
-        if isPicking {
-            VStack(spacing: 0) {
-                Divider().overlay(DS.Palette.stroke)
-                Text("轻点任意动作即可选中")
-                    .font(DS.Typography.caption)
-                    .foregroundStyle(DS.Palette.textTertiary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-            }
-            .background(DS.Palette.bg)
+        VStack(spacing: 0) {
+            Divider().overlay(DS.Palette.stroke)
+            Text("轻点任意动作即可选中")
+                .font(DS.Typography.caption)
+                .foregroundStyle(DS.Palette.textTertiary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
         }
+        .background(DS.Palette.bg)
     }
 
     // MARK: - 搜索
@@ -369,8 +381,13 @@ struct ExerciseLibraryView: View {
 
     // MARK: - 结果列表
 
+    /// 结果区头部：回退提示、区块标题、空态、署名。
     @ViewBuilder
-    private var resultsSection: some View {
+    private var resultsHeaderSection: some View {
+        // 结果由 ViewModel 预计算并缓存，这里只读。
+        // 曾经写 `let results = viewModel.results` 又在下面调一次
+        // `viewModel.results.contains(...)` —— 那是两个计算属性，
+        // 每次 body 求值都会把 1324 条重新筛选 + 评分 + 排序两遍。
         let results = viewModel.results
 
         VStack(alignment: .leading, spacing: DS.Spacing.item) {
@@ -386,39 +403,54 @@ struct ExerciseLibraryView: View {
 
             if results.isEmpty {
                 emptyState
-            } else {
-                // 用普通 VStack 而非嵌套 LazyVStack，外层已经是 LazyVStack
-                VStack(spacing: DS.Spacing.tight) {
-                    ForEach(results) { item in
-                        ExerciseRow(
-                            item: item,
-                            onTap: {
-                                viewModel.recordUsage(item)
-                                // 挑选模式下点行就是选中，直接交给调用方写进计划；
-                                // 常规模式下才是打开详情。
-                                if isPicking {
-                                    onAddToWorkout(item)
-                                } else {
-                                    onOpenExercise(item)
-                                }
-                            },
-                            onAddToWorkout: { onAddToWorkout(item) },
-                            onToggleFavorite: { viewModel.toggleFavorite(item) },
-                            onToggleHidden: { viewModel.toggleHidden(item) },
-                            onEdit: { onEditCustomExercise(item) },
-                            onDelete: { pendingDeletion = item },
-                            trailingSymbol: isPicking ? "checkmark.circle" : "chevron.right"
-                        )
-                    }
-                }
-
-                if viewModel.results.contains(where: \.hasLocalMedia) {
-                    MediaAttributionLabel()
-                        .padding(.top, DS.Spacing.tight)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
             }
         }
+    }
+
+    /// 结果行列表。每一行都是外层 LazyVStack 的直接子视图，滚动时才构建。
+    @ViewBuilder
+    private var resultsListSection: some View {
+        let results = viewModel.results
+
+        if !results.isEmpty {
+            // 行间距自己带：外层 LazyVStack 用的是 section 级间距，
+            // 行与行之间需要的是 tight 级，所以补在每行底部，
+            // 最后一行的补白由列表末尾的署名或容器 padding 吸收。
+            ForEach(results) { item in
+                row(for: item)
+                    .padding(.bottom, DS.Spacing.item)
+            }
+
+            if viewModel.hasLocalMediaInResults {
+                MediaAttributionLabel()
+                    .padding(.top, DS.Spacing.tight)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// 单行。抽成函数让每行的类型检查负担可控 —— 1324 行的 ForEach 闭包里
+    /// 内联六个闭包与多个分支，会让编译器在泛型推导上花掉大量时间。
+    private func row(for item: ExerciseLibraryItem) -> some View {
+        ExerciseRow(
+            item: item,
+            onTap: {
+                viewModel.recordUsage(item)
+                // 挑选模式下点行就是选中，直接交给调用方写进计划；
+                // 常规模式下才是打开详情。
+                if isPicking {
+                    onAddToWorkout(item)
+                } else {
+                    onOpenExercise(item)
+                }
+            },
+            onAddToWorkout: { onAddToWorkout(item) },
+            onToggleFavorite: { viewModel.toggleFavorite(item) },
+            onToggleHidden: { viewModel.toggleHidden(item) },
+            onEdit: { onEditCustomExercise(item) },
+            onDelete: { pendingDeletion = item },
+            trailingSymbol: isPicking ? "checkmark.circle" : "chevron.right"
+        )
     }
 
     private var emptyState: some View {

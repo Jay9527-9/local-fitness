@@ -168,6 +168,44 @@ struct MuscleGlyph: View {
 
 // MARK: - 动作行左侧的缩略图
 
+/// 缩略图缓存。
+///
+/// 列表滚动时每一行都会重新求值 body，如果每次都在 body 里
+/// `UIImage(contentsOfFile:)`，1324 行的列表就会在滚动中反复从磁盘读取
+/// 并解码 JPEG —— 实测这是动作库「卡顿」最直接的原因。
+///
+/// 用 NSCache 缓存已解码的图：它是线程安全的、收到内存警告会自动回收，
+/// 且以像素尺寸而非文件大小为成本计量，正好适合这个场景。
+enum ExerciseThumbnailCache {
+
+    /// 上限按「同时可见 + 少量预取」估算，40 张 52×52 与详情页的
+    /// 大图共用同一份缓存也足够。
+    private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 200
+        return cache
+    }()
+
+    /// 取一张缩略图。命中缓存直接返回，未命中才读盘并解码。
+    /// - Parameter item: 动作条目，用它的 image 路径作为缓存键
+    /// - Returns: 解码好的图；路径无效或文件缺失时返回 nil
+    static func image(for item: ExerciseLibraryItem) -> UIImage? {
+        guard let url = ExerciseMedia.thumbnailURL(for: item) else { return nil }
+
+        let key = url.path as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+
+        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
+    }
+
+    /// 清空缓存。数据源整体替换（如重新导入媒体）时调用。
+    static func clear() {
+        cache.removeAllObjects()
+    }
+}
+
 /// 动作行左侧的 52×52 视觉块。
 /// 优先用随包分发的本地缩略图；媒体缺失时回退到代码绘制的肌群图标。
 struct ExerciseThumbnail: View {
@@ -175,9 +213,14 @@ struct ExerciseThumbnail: View {
     let item: ExerciseLibraryItem
     var size: CGFloat = 52
 
+    /// 解码后的图只取一次，避免同一帧内多次访问缓存。
+    /// 用 @State 持有：行视图的身份由 ForEach 的 id 保证，
+    /// 同一行不会因滚动而复用错图。
+    @State private var image: UIImage?
+
     var body: some View {
         Group {
-            if let image = localImage {
+            if let image {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -194,13 +237,12 @@ struct ExerciseThumbnail: View {
                 )
             }
         }
+        .task(id: item.image) {
+            // 媒体未随包分发时整个分组都不必查缓存
+            guard ExerciseMedia.isMediaBundled else { return }
+            image = ExerciseThumbnailCache.image(for: item)
+        }
         .accessibilityHidden(true)
-    }
-
-    /// 从本地 Bundle 读取缩略图。读不到就返回 nil，交给占位图。
-    private var localImage: UIImage? {
-        guard let url = ExerciseMedia.thumbnailURL(for: item) else { return nil }
-        return UIImage(contentsOfFile: url.path)
     }
 }
 

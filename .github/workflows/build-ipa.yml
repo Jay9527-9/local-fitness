@@ -109,6 +109,17 @@ jobs:
           # 规模层完全看不见）。这是唯一能提前揪出这一类的门禁。
           python3 Tools/audit_enum_arity.py
 
+      - name: Exercise library performance regression
+        run: |
+          # 动作库（页面 02）性能与布局回归。实机反馈「加载慢、卡顿、
+          # 底栏挡住界面」，根因是四类**编得过、跑得动，但用起来不对**的问题：
+          #   1. 七个派生值写成计算属性 → 每次 body 求值全量重算 1324 条
+          #   2. 1324 行被普通 VStack 包住 → LazyVStack 的惰性被包没了
+          #   3. 缩略图 / GIF 在 body 内同步读盘解码 → 滚动掉帧
+          #   4. 底部叠了两层 safeAreaInset → 内容被 Tab 栏顶掉
+          # 前八层门禁对这类问题完全无感（语法对、类型对、调用点齐、规模也够小）。
+          python3 Tools/audit_exercise_library_perf.py
+
       - name: Refactor equivalence
         run: |
           # 拆方法时确认逻辑是**纯搬运**（新旧行集合差为空）。

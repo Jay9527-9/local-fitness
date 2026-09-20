@@ -909,6 +909,11 @@ struct PlanDetailView: View {
 
 /// 计划动作卡左侧缩略图。有本地素材时用 JPG，否则用代码绘制的肌群图标。
 /// 与动作库的 `ExerciseThumbnail` 分开，是因为这里需要处理「动作已被移除」的情况。
+/// 计划里一行的缩略图。item 为 nil（动作已被删除或库中缺失）时画占位。
+///
+/// 复用 `ExerciseThumbnail` 而不是自己再读一次盘：
+/// 后者会在 body 求值里同步 `UIImage(contentsOfFile:)`，既没有缓存
+/// 也就每次渲染都解码一遍，和动作库列表当初的卡顿是同一个成因。
 struct PlanExerciseThumbnail: View {
 
     var item: ExerciseLibraryItem?
@@ -916,16 +921,11 @@ struct PlanExerciseThumbnail: View {
 
     var body: some View {
         Group {
-            if let item, let url = ExerciseMedia.thumbnailURL(for: item),
-               let image = UIImage(contentsOfFile: url.path) {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: size, height: size)
-                    .clipShape(RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous))
+            if let item {
+                ExerciseThumbnail(item: item, size: size)
             } else {
                 MuscleGlyph(
-                    group: item.map { MuscleIconGroup.of(muscle: $0.primaryMuscle) } ?? .other,
+                    group: .other,
                     size: size,
                     tint: DS.Palette.textSecondary
                 )

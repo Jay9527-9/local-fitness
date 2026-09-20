@@ -47,12 +47,39 @@ enum ExerciseMedia {
     }
 
     /// 媒体是否随包分发。未打包时界面回退为图标占位，不显示破图。
-    static var isMediaBundled: Bool {
+    /// 结果缓存一次 —— 这个判断在每行动画视图里都会被读，重复查 Bundle 无意义。
+    private static let mediaBundledFlag: Bool = {
         Bundle.main.url(
             forResource: "0001-2gPfomN",
             withExtension: "jpg",
             subdirectory: "\(mediaDirectory)/images"
         ) != nil
+    }()
+
+    static var isMediaBundled: Bool { mediaBundledFlag }
+
+    /// GIF 解码缓存。
+    /// GIF 体积远大于缩略图（单条可达数百 KB），在 body 里同步
+    /// `Data(contentsOf:)` + `UIImage(data:)` 会直接卡住主线程。
+    /// 这里缓存解码结果，并配合异步加载避免阻塞渲染。
+    private static let animationCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 12
+        return cache
+    }()
+
+    /// 取一条动作的动画图。命中缓存直接返回；未命中则同步读盘解码。
+    /// 调用方应在异步上下文里调用，不要放进 body 求值路径。
+    static func animationImage(for item: ExerciseLibraryItem) -> UIImage? {
+        guard let url = animationURL(for: item) else { return nil }
+
+        let key = url.path as NSString
+        if let cached = animationCache.object(forKey: key) { return cached }
+
+        guard let data = try? Data(contentsOf: url),
+              let image = UIImage(data: data) else { return nil }
+        animationCache.setObject(image, forKey: key)
+        return image
     }
 }
 
@@ -69,20 +96,23 @@ struct ExerciseAnimationView: View {
     var aspectRatio: CGFloat = 1
 
     @State private var isPlaying = true
+    /// 解码后的动画帧。异步装载，避免在主线程读盘 + 解码 GIF。
+    @State private var image: UIImage?
+    /// 是否已尝试过加载。用于区分「还没加载完」与「确实没有素材」，
+    /// 避免素材缺失时先闪一下占位图再闪回来。
+    @State private var didAttemptLoad = false
 
     var body: some View {
         ZStack {
             DS.Palette.surfaceElevated
 
-            if let url = ExerciseMedia.animationURL(for: item),
-               let data = try? Data(contentsOf: url),
-               let image = UIImage(data: data) {
+            if let image {
                 // SwiftUI 的 Image 会自动播放 GIF 首帧以外的动画帧
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .opacity(isPlaying ? 1 : 0.55)
-            } else {
+            } else if didAttemptLoad {
                 fallback
             }
         }
@@ -92,6 +122,15 @@ struct ExerciseAnimationView: View {
         .onTapGesture {
             guard autoPlay else { return }
             withAnimation(DS.Motion.standard) { isPlaying.toggle() }
+        }
+        .task(id: item.gifURL) {
+            // 放后台线程读盘解码，主线程只负责赋值。
+            // 单条 GIF 可能数百 KB，同步解码会让详情页明显掉帧。
+            let loaded = await Task.detached(priority: .userInitiated) {
+                ExerciseMedia.animationImage(for: item)
+            }.value
+            image = loaded
+            didAttemptLoad = true
         }
         .accessibilityElement()
         .accessibilityLabel("\(item.displayName) 动作动画")

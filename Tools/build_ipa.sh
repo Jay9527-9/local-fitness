@@ -92,8 +92,15 @@ if ! python3 Tools/audit_enum_arity.py; then
   echo "   !! 未通过: Tools/audit_enum_arity.py"
   GATE_FAIL=1
 fi
+# 动作库性能回归（页面 02）：派生结果必须预计算、列表行必须真的惰性、
+# 缩略图 / 动画不得在 body 内同步解码、底部不得叠两层 safeAreaInset。
+# 这四条都是「编得过、跑得动，但用起来卡/被挡住」的问题，前七层全都看不见。
+if ! python3 Tools/audit_exercise_library_perf.py; then
+  echo "   !! 未通过: Tools/audit_exercise_library_perf.py"
+  GATE_FAIL=1
+fi
 if [ "$GATE_FAIL" -ne 0 ]; then
-  echo "!! 规格审计 / 值语义推演 / 规模审计 / 枚举个数审计未通过，已中止。"
+  echo "!! 规格审计 / 值语义推演 / 规模审计 / 枚举个数审计 / 性能回归未通过，已中止。"
   exit 1
 fi
 echo "    全部通过"
