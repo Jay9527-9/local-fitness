@@ -50,7 +50,9 @@ final class JSONFitnessRepository: FitnessRepository {
     /// 内存缓存：读操作直接返回，写操作同步回写磁盘
     private var plans: [Plan] = []
     private var sessions: [WorkoutSession] = []
-    private var exercises: [ExerciseLibraryItem] = []
+    private var exercises: [ExerciseLibraryItem] = [] {
+        didSet { invalidateExerciseCaches() }
+    }
     private var measurements: [BodyMeasurement] = []
     private var recentExercises: [RecentExerciseRef] = []
     private var restDays: [RestDay] = []
@@ -60,6 +62,41 @@ final class JSONFitnessRepository: FitnessRepository {
     private var restTimer: RestTimerRecord?
     /// 本地个人资料。nil 表示尚未创建。
     private var profile: UserProfile?
+
+    /// 按名称排序的全量动作缓存。fetchExercises 在每次切 Tab、每次打开
+    /// 挑选弹层时都会被调用，1324 条的 locale 排序没必要重复做 ——
+    /// exercises 一旦变化（didSet）立即失效，读到的一定是新数据。
+    private var sortedExercisesCache: [ExerciseLibraryItem]?
+    /// id → 条目 索引缓存。fetchRecentExercises 每次都要按 id 查表，
+    /// 1324 条的 Dictionary 构建同样只在数据变化后做一次。
+    private var exercisesByIDCache: [String: ExerciseLibraryItem]?
+
+    private func invalidateExerciseCaches() {
+        sortedExercisesCache = nil
+        exercisesByIDCache = nil
+    }
+
+    /// 按名称排序的全量动作（带缓存）。排序结果与原 sortedByName 完全一致，
+    /// 只是数据不变时直接复用上一次的排序结果。
+    private func sortedExercisesByName() -> [ExerciseLibraryItem] {
+        if let sortedExercisesCache { return sortedExercisesCache }
+        let sorted = exercises.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        sortedExercisesCache = sorted
+        return sorted
+    }
+
+    /// id → 条目 索引（带缓存）。
+    private func exercisesByID() -> [String: ExerciseLibraryItem] {
+        if let exercisesByIDCache { return exercisesByIDCache }
+        let map = Dictionary(
+            exercises.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        exercisesByIDCache = map
+        return map
+    }
 
     private var isLoaded = false
     /// 动作库是否已导入种子数据，避免每次启动重复读 1.4 MB JSON
@@ -602,15 +639,18 @@ final class JSONFitnessRepository: FitnessRepository {
 
     func fetchExercises(includeHidden: Bool) throws -> [ExerciseLibraryItem] {
         try loadIfNeeded()
-        let list = includeHidden ? exercises : exercises.filter { !$0.isHidden }
-        return sortedByName(list)
+        // 先取按名称排序的缓存视图，再按需过滤 —— 与旧的
+        // sortedByName(includeHidden ? exercises : exercises.filter { … })
+        // 输出完全一致（过滤不改变相对顺序），只是排序只算一次。
+        let sorted = sortedExercisesByName()
+        return includeHidden ? sorted : sorted.filter { !$0.isHidden }
     }
 
     func fetchExercises(ids: [String]) throws -> [ExerciseLibraryItem] {
         try loadIfNeeded()
         guard !ids.isEmpty else { return [] }
         let wanted = Set(ids)
-        return sortedByName(exercises.filter { wanted.contains($0.id) })
+        return sortedExercisesByName().filter { wanted.contains($0.id) }
     }
 
     func save(exercise: ExerciseLibraryItem) throws {
@@ -673,11 +713,8 @@ final class JSONFitnessRepository: FitnessRepository {
         return exercises[index]
     }
 
-    private func sortedByName(_ list: [ExerciseLibraryItem]) -> [ExerciseLibraryItem] {
-        list.sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
-    }
+    // 旧的 sortedByName(_:) 已由带缓存的 sortedExercisesByName() 取代，
+    // 两处调用点（fetchExercises / fetchExercises(ids:)）一并切换。
 
     @discardableResult
     func seedExerciseLibraryIfNeeded() throws -> Int {
@@ -795,10 +832,8 @@ final class JSONFitnessRepository: FitnessRepository {
         try loadIfNeeded()
         guard !recentExercises.isEmpty else { return [] }
 
-        let byID = Dictionary(
-            exercises.map { ($0.id, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
+        // id → 条目 索引带缓存：1324 条的 Dictionary 不必每次切 Tab 都重建
+        let byID = exercisesByID()
         // 已隐藏或已删除的条目不进最近使用
         let ordered = recentExercises
             .sorted { $0.usedAt > $1.usedAt }

@@ -90,6 +90,20 @@ struct MainTabBar: View {
                         .frame(height: 1)
                 }
         )
+        // 栏体上沿的渐隐过渡。列表滚动时内容先淡出、再被栏体遮住，
+        // 消除「底栏硬生生切掉一行」的观感（实机反馈：底栏挡住动作界面）。
+        // 纯视觉层：不参与布局、不改变 safeAreaInset 让出的内容高度，
+        // 也不拦截点击（allowsHitTesting(false)）。
+        .overlay(alignment: .top) {
+            LinearGradient(
+                colors: [DS.Palette.bg.opacity(0), DS.Palette.bg],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 28)
+            .offset(y: -28)
+            .allowsHitTesting(false)
+        }
     }
 }
 
@@ -98,6 +112,16 @@ struct MainTabBar: View {
 struct RootView: View {
 
     private let repository: FitnessRepository
+
+    /// 动作库状态机由 RootView **常驻持有**。
+    ///
+    /// 为什么不放回 ExercisesTab 里：TabTransitionContainer 用 `.id(tab)` 切换，
+    /// 每次切 Tab 都会整棵重建该 Tab 的视图树 —— StateObject 跟着重建，
+    /// 1324 条动作的加载 / 筛选 / 排序全部重跑一遍，用户每次点「动作」
+    /// 都要先看一帧骨架屏（实机反馈：点击动作板块会卡住、加载慢）。
+    /// 提到 RootView 后切 Tab 只重建视图，数据与派生结果直接复用，
+    /// 二次进入零等待；刷新由页面的 .task 静默完成。
+    @StateObject private var exercisesViewModel: ExerciseLibraryViewModel
 
     @State private var selection: MainTab = .training
     /// 训练结束后置为新值，驱动首页与历史页重新读盘。
@@ -112,6 +136,9 @@ struct RootView: View {
 
     init(repository: FitnessRepository) {
         self.repository = repository
+        _exercisesViewModel = StateObject(
+            wrappedValue: ExerciseLibraryViewModel(repository: repository)
+        )
     }
 
     var body: some View {
@@ -158,6 +185,7 @@ struct RootView: View {
         case .exercises:
             ExercisesTab(
                 repository: repository,
+                viewModel: exercisesViewModel,
                 pendingDetail: pendingExerciseDetail,
                 onConsumePendingDetail: { pendingExerciseDetail = nil }
             )
@@ -168,6 +196,9 @@ struct RootView: View {
                 highlightSessionID: pendingHistorySessionID,
                 onConsumeHighlight: { pendingHistorySessionID = nil },
                 onClearedAllData: {
+                    // 清空全部数据会把动作库一并清掉，常驻的动作库状态机
+                    // 必须同步刷新，否则切回动作页还显示清空前的列表。
+                    exercisesViewModel.reloadAfterExternalChange()
                     selection = .training
                     showOnboarding = true
                 }
@@ -193,6 +224,8 @@ struct RootView: View {
                     selection = .history
                 },
                 onClearedAllData: {
+                    // 同历史 Tab：清空全部数据后刷新常驻的动作库状态机
+                    exercisesViewModel.reloadAfterExternalChange()
                     selection = .training
                     showOnboarding = true
                 }
@@ -1861,6 +1894,10 @@ struct ExercisePickerContext: Identifiable {
 private struct ExercisesTab: View {
 
     let repository: FitnessRepository
+    /// 动作库状态机。由 RootView 常驻持有（见 RootView.exercisesViewModel 注释），
+    /// 这里以 ObservedObject 接收 —— Tab 切换重建视图时状态与数据不丢，
+    /// 页面的 .task 会在每次出现时静默刷新一遍。
+    @ObservedObject var viewModel: ExerciseLibraryViewModel
     /// 从「动作收藏」跨 Tab 进来时要打开的动作详情。非 nil 时出现即推入详情页。
     let pendingDetail: ExerciseLibraryItem?
     /// 消费掉 pendingDetail，避免反复推入
@@ -1871,20 +1908,16 @@ private struct ExercisesTab: View {
     @State private var editingCustom: ExerciseLibraryItem?
     @State private var showEditor = false
 
-    /// 单一实例，避免每次 body 求值都新建 ViewModel 导致状态丢失
-    @StateObject private var viewModel: ExerciseLibraryViewModel
-
     init(
         repository: FitnessRepository,
+        viewModel: ExerciseLibraryViewModel,
         pendingDetail: ExerciseLibraryItem?,
         onConsumePendingDetail: @escaping () -> Void
     ) {
         self.repository = repository
+        self.viewModel = viewModel
         self.pendingDetail = pendingDetail
         self.onConsumePendingDetail = onConsumePendingDetail
-        _viewModel = StateObject(
-            wrappedValue: ExerciseLibraryViewModel(repository: repository)
-        )
     }
 
     var body: some View {

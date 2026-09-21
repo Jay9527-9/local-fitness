@@ -152,7 +152,12 @@ final class ExerciseLibraryViewModel: ObservableObject {
     // MARK: - 加载
 
     func load() async {
-        loadState = .loading
+        // 静默刷新：已经加载过一次时**不再把状态打回 loading**。
+        // 动作 Tab 每次切换都会重建视图并触发 .task 调到这里，若无条件回
+        // loading，用户每次点进来都要先看一帧骨架屏 —— 这正是「切 Tab
+        // 卡一下」的体感来源。VM 由 RootView 常驻持有（见 RootView 注释），
+        // 二次进入直接用缓存结果渲染，数据在后台静默校准。
+        if allExercises.isEmpty { loadState = .loading }
         do {
             // 首次启动导入动作库；失败不阻断页面，界面会走空状态
             _ = try? repository.seedExerciseLibraryIfNeeded()
@@ -164,7 +169,10 @@ final class ExerciseLibraryViewModel: ObservableObject {
             rebuildDerived()
             loadState = .loaded
         } catch {
-            loadState = .failed(Self.message(for: error))
+            // 已有内容时加载失败不打断现有列表，只在真正空库时展示失败态
+            if allExercises.isEmpty {
+                loadState = .failed(Self.message(for: error))
+            }
         }
     }
 

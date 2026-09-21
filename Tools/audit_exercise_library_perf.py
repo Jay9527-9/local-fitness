@@ -262,6 +262,54 @@ item("不含 iOS 16.4+ 专属 API",
              r"|\.presentationBackground|scrollBounceBehavior|containerRelativeFrame"))
 
 
+print("== 6. Tab 切换不重建动作库状态机（2026-09-21 实机复检新增） ==")
+
+# 由来：L8 落地后实机仍反馈「点击动作板块会卡住、加载慢」。根因在四类之外：
+# TabTransitionContainer 用 .id(tab) 切换，ExercisesTab 连同它的
+# StateObject VM 每次切 Tab 都被整体重建，1324 条的加载 + 筛选 + 排序
+# 每次都从头跑一遍，并且先闪一帧骨架屏。修复：VM 提升到 RootView 常驻，
+# ExercisesTab 以 ObservedObject 接收；load() 已有数据时静默刷新。
+
+item("RootView 常驻持有动作库 VM",
+     has(ROOTV, r"@StateObject\s+private\s+var\s+exercisesViewModel\s*:\s*ExerciseLibraryViewModel"))
+item("ExercisesTab 以 ObservedObject 接收常驻 VM",
+     has(ROOTV, r"@ObservedObject\s+var\s+viewModel\s*:\s*ExerciseLibraryViewModel"))
+item("ExercisesTab 不再自建 StateObject VM",
+     not_has(ROOTV,
+             r"@StateObject\s+private\s+var\s+viewModel\b"
+             r"|_viewModel\s*=\s*StateObject"),
+     "VM 又回到了 Tab 内部，切 Tab 会整棵重建")
+item("ExercisesTab 构造参数含 viewModel",
+     has(ROOTV, r"ExercisesTab\([\s\S]{0,200}viewModel:\s*exercisesViewModel"))
+
+item("load() 已有数据时不再打回 loading（静默刷新）",
+     has(VM, r"func\s+load\(\)\s+async[\s\S]{0,240}if\s+allExercises\.isEmpty\s*\{\s*loadState\s*=\s*\.loading"),
+     "每次切 Tab 都会闪骨架屏")
+
+item("清除全部数据后刷新常驻动作库 VM",
+     has(ROOTV, r"exercisesViewModel\.reloadAfterExternalChange\(\)"),
+     "清空数据后动作页会显示清空前的旧列表")
+
+# 仓储层：切 Tab 与挑选弹层每次都调 fetchExercises / fetchRecentExercises，
+# 排序与建索引必须缓存复用，而不是每次全量重算。
+REP = CODE.get("Data/JSONFitnessRepository.swift", "")
+item("仓储层有排序缓存",
+     has(REP, r"sortedExercisesCache"))
+item("exercises 变化即失效缓存（didSet）",
+     has(REP, r"private\s+var\s+exercises\s*:\s*\[ExerciseLibraryItem\]\s*=\s*\[\]\s*\{\s*didSet"))
+item("fetchExercises 走排序缓存",
+     has(REP, r"func\s+fetchExercises\(includeHidden[\s\S]{0,240}sortedExercisesByName\(\)"))
+item("仓储层有 id 索引缓存",
+     has(REP, r"exercisesByIDCache"))
+item("fetchRecentExercises 复用 id 索引",
+     has(REP, r"func\s+fetchRecentExercises[\s\S]{0,240}exercisesByID\(\)"))
+
+# 底栏：栏体上沿必须有渐隐过渡，滚动内容不再被生硬切掉
+item("MainTabBar 上沿有渐隐过渡",
+     has(ROOTV, r"MainTabBar[\s\S]{0,2000}LinearGradient"),
+     "底栏又会硬切滚过的内容")
+
+
 # =====================================================================
 print("\n" + "=" * 72)
 gaps = [x for x in ITEMS if not x[1]]
