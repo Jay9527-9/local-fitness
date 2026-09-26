@@ -177,6 +177,8 @@ enum DS {
         static let countUp = Animation.easeOut(duration: 0.5)
         /// 「动作完成情况」展开 / 收起
         static let disclosure = Animation.easeInOut(duration: 0.22)
+        /// 休息面板折叠 / 展开（问题二）：弹性过渡，收起成顶部胶囊、点开还原
+        static let spring = Animation.spring(response: 0.4, dampingFraction: 0.85)
     }
 
     // MARK: - 蒙层

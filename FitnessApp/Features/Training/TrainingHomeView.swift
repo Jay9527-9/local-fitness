@@ -9,7 +9,20 @@ import SwiftUI
 
 struct TrainingHomeView: View {
 
-    @ObservedObject var viewModel: TrainingHomeViewModel
+    /// 仓储由导航容器注入；视图模型在内部以 @StateObject 持有。
+    ///
+    /// 为什么不放回父级 `homeRoot` 计算属性里 `TrainingHomeViewModel(repository:)`
+    /// 然后以 `@ObservedObject` 传进来：那个计算属性每次 `body` 求值都会新建一个
+    /// VM 实例，而 `.task { load() }` 闭包只捕获首次出现的那个实例。首屏启动时
+    /// `body` 会被多次求值（Tab 过渡 / safeAreaInset / 引导判断），于是 `load()`
+    /// 跑在第一个被丢弃的实例上，视图随后观察的是后来的新实例 —— `loadState`
+    /// 永远停在 `.loading`，骨架屏卡死；切 Tab 后整棵子树重建、VM 干净重建才正常。
+    /// 用 @StateObject 让 VM 随视图实例稳定存在，`.task` 与视图观察的是同一个实例。
+    /// 刷新语义不受影响：训练结束后的 `homeReloadID`、切 Tab 的 `.id(tab)` 都会
+    /// 重建 `TrainingHomeView`，从而重建它的 @StateObject 并重新走 `.task` 读盘。
+    let repository: FitnessRepository
+
+    @StateObject private var viewModel: TrainingHomeViewModel
 
     /// 由外部导航容器注入的路由回调
     var onStartTraining: (TodayTrainingState) -> Void
@@ -23,6 +36,31 @@ struct TrainingHomeView: View {
     var onResumeSession: (WorkoutSession) -> Void
     /// 草稿损坏 / 恢复失败时进入数据恢复页（页面 50）。
     var onOpenRecovery: () -> Void
+
+    init(
+        repository: FitnessRepository,
+        onStartTraining: @escaping (TodayTrainingState) -> Void,
+        onNewStrength: @escaping () -> Void,
+        onNewCardio: @escaping () -> Void,
+        onOpenPlan: @escaping (Plan) -> Void,
+        onOpenSession: @escaping (WorkoutSession) -> Void,
+        onOpenCalendar: @escaping () -> Void,
+        onOpenMore: @escaping () -> Void,
+        onResumeSession: @escaping (WorkoutSession) -> Void,
+        onOpenRecovery: @escaping () -> Void
+    ) {
+        self.repository = repository
+        _viewModel = StateObject(wrappedValue: TrainingHomeViewModel(repository: repository))
+        self.onStartTraining = onStartTraining
+        self.onNewStrength = onNewStrength
+        self.onNewCardio = onNewCardio
+        self.onOpenPlan = onOpenPlan
+        self.onOpenSession = onOpenSession
+        self.onOpenCalendar = onOpenCalendar
+        self.onOpenMore = onOpenMore
+        self.onResumeSession = onResumeSession
+        self.onOpenRecovery = onOpenRecovery
+    }
 
     /// 计划操作抽屉的目标，nil 表示不展示
     @State private var drawerPlan: Plan?
@@ -621,7 +659,7 @@ private struct PlanActionDrawer: View {
 
 #Preview("训练首页 · 有进行中训练") {
     TrainingHomeView(
-        viewModel: TrainingHomeViewModel(repository: PreviewFitnessRepository()),
+        repository: PreviewFitnessRepository(),
         onStartTraining: { _ in },
         onNewStrength: {},
         onNewCardio: {},
@@ -637,7 +675,7 @@ private struct PlanActionDrawer: View {
 
 #Preview("训练首页 · 空状态") {
     TrainingHomeView(
-        viewModel: TrainingHomeViewModel(repository: PreviewFitnessRepository.makeEmpty()),
+        repository: PreviewFitnessRepository.makeEmpty(),
         onStartTraining: { _ in },
         onNewStrength: {},
         onNewCardio: {},

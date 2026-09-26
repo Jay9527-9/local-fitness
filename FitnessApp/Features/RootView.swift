@@ -82,27 +82,16 @@ struct MainTabBar: View {
         }
         .padding(.top, 6)
         .padding(.bottom, 2)
-        .background(
-            DS.Palette.bg
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(DS.Palette.stroke)
-                        .frame(height: 1)
-                }
-        )
-        // 栏体上沿的渐隐过渡。列表滚动时内容先淡出、再被栏体遮住，
-        // 消除「底栏硬生生切掉一行」的观感（实机反馈：底栏挡住动作界面）。
-        // 纯视觉层：不参与布局、不改变 safeAreaInset 让出的内容高度，
-        // 也不拦截点击（allowsHitTesting(false)）。
+        // 问题一·底栏遮挡（第二方案）：背景改半透明磨砂材质，
+        // 内容自然延伸、视觉不再「实心挡住」。safeAreaInset 让出的内容高度不变，
+        // 栏体位置不变，只是变透。仍保留顶部 1px 分隔线。
+        // 原来的上沿渐隐过渡随之移除——材质本身已提供内容到栏体的平滑过渡，
+        // 再叠一层不透明渐变反而会在栏体上沿留一条实色带。
+        .background(.ultraThinMaterial)
         .overlay(alignment: .top) {
-            LinearGradient(
-                colors: [DS.Palette.bg.opacity(0), DS.Palette.bg],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 28)
-            .offset(y: -28)
-            .allowsHitTesting(false)
+            Rectangle()
+                .fill(DS.Palette.stroke)
+                .frame(height: 1)
         }
     }
 }
@@ -353,7 +342,7 @@ private struct ProfileTab: View {
     private var navHost: some View {
         NavigationStack(path: $path) {
             ProfileView(
-                viewModel: ProfileViewModel(repository: repository),
+                repository: repository,
                 onOpenBodyData: { path.append(ProfileRoute.bodyData) },
                 onOpenProfileEdit: { path.append(ProfileRoute.profileEdit) },
                 onOpenPlans: { path.append(ProfileRoute.planList) },
@@ -1017,7 +1006,7 @@ private struct HistoryTab: View {
     private var navHost: some View {
         NavigationStack(path: $path) {
             HistoryView(
-                viewModel: HistoryViewModel(repository: repository),
+                repository: repository,
                 highlightSessionID: highlightSessionID,
                 onOpenSession: { session in
                     pushDetail(session.id)
@@ -1352,7 +1341,7 @@ private struct TrainingTab: View {
     ///    `popToRoot()` 单独负责返回栈底，就永远不会踩到这个坑。
     private var homeRoot: some View {
         TrainingHomeView(
-            viewModel: TrainingHomeViewModel(repository: repository),
+            repository: repository,
             onStartTraining: { (state: TodayTrainingState) in
                 switch state {
                 // 注意 `_` 的个数必须与枚举声明里的关联值个数逐一对上：

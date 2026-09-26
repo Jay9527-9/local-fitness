@@ -37,11 +37,25 @@ struct RestCountdownPanel: View {
     let currentDefaultRest: Int?
     let canSetDefault: Bool
 
+    /// 是否折叠成顶部胶囊。状态只存在于本视图；父视图每秒传入的 `timer`
+    /// 快照照常更新，折叠不影响倒计时与结束提示音。
+    @State private var isMinimized = false
+
     var body: some View {
-        ZStack(alignment: .bottom) {
-            scrim
-            panel
+        ZStack {
+            if !isMinimized {
+                scrim
+                panel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                minimizedCapsule
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
+        // 折叠 / 展开用 spring 过渡（问题二要求 withAnimation(.spring)）
+        .animation(DS.Motion.spring, value: isMinimized)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("组间休息")
         .accessibilityValue(accessibilityValue)
@@ -52,8 +66,10 @@ struct RestCountdownPanel: View {
     private var scrim: some View {
         DS.Scrim.color
             .ignoresSafeArea()
-            // 点遮罩不关闭：误触会打断训练节奏，关闭入口只保留右上角按钮
-            .onTapGesture {}
+            // 点遮罩 = 最小化（而非关闭）：误触不会打断训练节奏，
+            // 面板收成顶部胶囊、倒计时继续走；想彻底关掉仍用右上角 ×。
+            .onTapGesture { isMinimized = true }
+            .transition(.opacity)
             .accessibilityHidden(true)
     }
 
@@ -104,6 +120,7 @@ struct RestCountdownPanel: View {
 
             Spacer(minLength: DS.Spacing.tight)
 
+            minimizeButton
             closeButton
         }
         .padding(.horizontal, DS.Spacing.card)
@@ -122,6 +139,61 @@ struct RestCountdownPanel: View {
         .buttonStyle(PressableButtonStyle())
         .accessibilityLabel("关闭休息面板")
         .accessibilityHint("倒计时会继续，回到训练页仍可看到剩余时间")
+    }
+
+    /// 最小化按钮：把面板收成顶部胶囊，不停止倒计时。
+    /// 与右上角 × 的区别：× 才是真正关闭（清盘），最小化只是收起、计时继续。
+    private var minimizeButton: some View {
+        Button(action: { isMinimized = true }) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(DS.Palette.textSecondary)
+                .frame(width: DS.Size.minTapTarget, height: DS.Size.minTapTarget)
+                .background(Circle().fill(DS.Palette.fieldFill))
+                .contentShape(Circle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .accessibilityLabel("最小化休息面板")
+        .accessibilityHint("收成顶部胶囊，倒计时继续")
+    }
+
+    // MARK: - 折叠态：顶部胶囊
+
+    /// 最小化后收成的顶部小胶囊：只显示剩余时间，点击展开。
+    /// 计时状态仍在父视图的 ViewModel 里，折叠不影响倒计时与结束提示音。
+    private var minimizedCapsule: some View {
+        HStack(spacing: DS.Spacing.tight) {
+            Image(systemName: "timer")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DS.Palette.textSecondary)
+
+            Text(FormatterKit.stopwatch(seconds: timer.remainingSeconds))
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .foregroundStyle(
+                    timer.isFinalCountdown && ProfileSettings.lastTenSecondsReminder
+                        ? DS.Palette.accent : DS.Palette.textPrimary
+                )
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Image(systemName: "chevron.up")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(DS.Palette.textSecondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay(Capsule().stroke(DS.Palette.stroke.opacity(0.6), lineWidth: 1))
+                .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+        )
+        .onTapGesture { isMinimized = false }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("组间休息，剩余 \(spokenTime)")
+        .accessibilityHint("点击展开休息面板")
+        // 落在训练页顶部固定栏之下，避免与「最小化 / 训练名 / 结束」重叠
+        .padding(.top, DS.Size.sessionBarHeight + DS.Spacing.tight)
     }
 
     // MARK: - 超大倒计时 + 进度环

@@ -318,7 +318,17 @@ final class HistoryViewModel: ObservableObject {
 
 struct HistoryView: View {
 
-    @ObservedObject var viewModel: HistoryViewModel
+    /// 仓储由导航容器注入；视图模型在内部以 @StateObject 持有。
+    ///
+    /// 与训练首页同款根因：原本 `viewModel` 由 RootView 的 `navHost` 计算属性内联
+    /// `HistoryViewModel(repository:)` 创建再以 `@ObservedObject` 传入，每次 `body`
+    /// 求值都新建实例，而 `.task { load() }` 只捕获首个出现的实例，于是 `loadState`
+    /// 停在 `.loading`、骨架屏卡死。改 @StateObject 让 VM 随视图实例稳定存在，
+    /// `.task` 与观察的是同一实例。刷新语义不变：`historyReloadToken` 改变会重建
+    /// 本视图（`.id`），从而重建 @StateObject 并重载。
+    let repository: FitnessRepository
+
+    @StateObject private var viewModel: HistoryViewModel
     /// 需要高亮并定位到的训练。来自训练总结页的「查看历史记录」。
     var highlightSessionID: UUID?
     var onOpenSession: (WorkoutSession) -> Void
@@ -343,6 +353,23 @@ struct HistoryView: View {
     @State private var showAddRestDay = false
     /// 页面 34 休息日详情抽屉
     @State private var restDayDetailTarget: RestDay?
+
+    init(
+        repository: FitnessRepository,
+        highlightSessionID: UUID? = nil,
+        onOpenSession: @escaping (WorkoutSession) -> Void,
+        onOpenDraft: @escaping (UUID) -> Void,
+        onOpenStats: @escaping () -> Void,
+        onDataChanged: @escaping () -> Void = {}
+    ) {
+        self.repository = repository
+        _viewModel = StateObject(wrappedValue: HistoryViewModel(repository: repository))
+        self.highlightSessionID = highlightSessionID
+        self.onOpenSession = onOpenSession
+        self.onOpenDraft = onOpenDraft
+        self.onOpenStats = onOpenStats
+        self.onDataChanged = onDataChanged
+    }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -1020,7 +1047,7 @@ private struct HistoryListRow: View {
 
 #Preview("历史 · 日历") {
     HistoryView(
-        viewModel: HistoryViewModel(repository: PreviewFitnessRepository()),
+        repository: PreviewFitnessRepository(),
         highlightSessionID: nil,
         onOpenSession: { _ in },
         onOpenDraft: { _ in },
@@ -1031,7 +1058,7 @@ private struct HistoryListRow: View {
 
 #Preview("历史 · 空数据") {
     HistoryView(
-        viewModel: HistoryViewModel(repository: PreviewFitnessRepository.makeEmpty()),
+        repository: PreviewFitnessRepository.makeEmpty(),
         highlightSessionID: nil,
         onOpenSession: { _ in },
         onOpenDraft: { _ in },

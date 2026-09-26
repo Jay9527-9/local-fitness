@@ -68,16 +68,21 @@ enum ExerciseMedia {
         return cache
     }()
 
-    /// 取一条动作的动画图。命中缓存直接返回；未命中则同步读盘解码。
+    /// 取一条动作的动画图。命中缓存直接返回；未命中则读盘解码。
     /// 调用方应在异步上下文里调用，不要放进 body 求值路径。
+    ///
+    /// 关键：必须用 `UIImage(contentsOfFile:)` 而非 `UIImage(data:)`。
+    /// 系统图像解码器只有在「按文件路径解码」时才会把 GIF 的**多帧**回填到
+    /// `UIImage.images`；`UIImage(data:)` 在很多系统版本上只拿到首帧。
+    /// 拿不到多帧，`GifImageView` 也就无从逐帧循环 —— 这正是之前
+    /// 「动作 GIF 不动」的根因之一。
     static func animationImage(for item: ExerciseLibraryItem) -> UIImage? {
         guard let url = animationURL(for: item) else { return nil }
 
         let key = url.path as NSString
         if let cached = animationCache.object(forKey: key) { return cached }
 
-        guard let data = try? Data(contentsOf: url),
-              let image = UIImage(data: data) else { return nil }
+        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
         animationCache.setObject(image, forKey: key)
         return image
     }
@@ -107,10 +112,10 @@ struct ExerciseAnimationView: View {
             DS.Palette.surfaceElevated
 
             if let image {
-                // SwiftUI 的 Image 会自动播放 GIF 首帧以外的动画帧
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
+                // GIF 必须走 UIKit 的 UIImageView 才能逐帧播放：
+                // SwiftUI 的 `Image(uiImage:)` 只会画出 GIF 的**首帧**，
+                // 不会循环动画（这是之前「动作 GIF 不动」的根因）。
+                GifImageView(image: image, isPlaying: isPlaying)
                     .opacity(isPlaying ? 1 : 0.55)
             } else if didAttemptLoad {
                 fallback
@@ -119,6 +124,7 @@ struct ExerciseAnimationView: View {
         .frame(maxWidth: .infinity)
         .aspectRatio(aspectRatio, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
+        .contentShape(Rectangle())
         .onTapGesture {
             guard autoPlay else { return }
             withAnimation(DS.Motion.standard) { isPlaying.toggle() }
@@ -148,6 +154,44 @@ struct ExerciseAnimationView: View {
             Text("动画素材未随包分发")
                 .font(DS.Typography.caption)
                 .foregroundStyle(DS.Palette.textTertiary)
+        }
+    }
+}
+
+// MARK: - GIF 渲染
+
+/// 用 UIKit 的 `UIImageView` 渲染**动画** GIF。
+///
+/// 为什么不能用 SwiftUI 的 `Image(uiImage:)`：
+/// SwiftUI 的 `Image` 只把 `UIImage` 当作单帧位图绘制，**不会**逐帧循环播放
+/// 动画。即便 `UIImage` 本身携带了多帧（GIF），`Image(uiImage:)` 仍只显示首帧。
+/// 只有 `UIImageView` 在拿到「多帧 UIImage」时会自动循环播放，因此 GIF 的播放
+/// 必须走 UIKit —— 这是 `ExerciseAnimationView` 之前「动作 GIF 不动」的根因。
+///
+/// 暂停语义：调用方把 `isPlaying` 置 false 时停止动画，停在首帧（UIImageView
+/// 的 `stopAnimating` 行为）；再次播放从首帧重新开始，符合演示类动画的预期。
+struct GifImageView: UIViewRepresentable {
+
+    let image: UIImage
+    let isPlaying: Bool
+
+    func makeUIView(context: Context) -> UIImageView {
+        let imageView = UIImageView()
+        imageView.contentMode = .scaleAspectFit
+        imageView.clipsToBounds = true
+        imageView.backgroundColor = .clear
+        return imageView
+    }
+
+    func updateUIView(_ uiView: UIImageView, context: Context) {
+        // 多帧（动画）图才需要 start/stop；静态图直接显示即可。
+        uiView.image = image
+        if image.images != nil {
+            if isPlaying {
+                uiView.startAnimating()
+            } else {
+                uiView.stopAnimating()
+            }
         }
     }
 }
