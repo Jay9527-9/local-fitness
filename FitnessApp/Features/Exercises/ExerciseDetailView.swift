@@ -89,6 +89,10 @@ struct ExerciseDetailView: View {
             await viewModel.load()
             viewModel.loadLastRecord()
         }
+        // 详情页沉浸：本页在导航栈期间隐藏全局 Tab 栏，
+        // 底部只保留「添加到训练」主操作条；视图移除后自动恢复。
+        // 用 OR 聚合，push 出的计划详情 / 训练页自动继承沉浸态。
+        .preference(key: SessionImmersiveKey.self, value: true)
         .sheet(isPresented: $showAddToWorkout) { addToWorkoutSheet }
         .sheet(isPresented: $showPrescription) { prescriptionSheet }
         .sheet(isPresented: $showNewPlanName) { newPlanSheet }

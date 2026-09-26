@@ -50,6 +50,23 @@ enum MainTab: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - 沉浸式 Tab 栏
+
+/// 页面在导航栈中上报的沉浸状态：沉浸时隐藏全局 Tab 栏，
+/// 让页面自己的底部主操作条独占底部，彻底消除「按钮被底栏挡住」。
+///
+/// 聚合用 OR 而不是「最后一个上报者」：
+/// 详情页 push 计划详情 / 计划详情 push 训练页时，下层页面的
+/// onDisappear 会把 value 覆盖回 false，破坏上层沉浸态。
+/// OR 语义下只有 true 有发言权，false 永不生效；
+/// 视图树移除后 preference 自动清理回 defaultValue(false)。
+struct SessionImmersiveKey: PreferenceKey {
+    static var defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
 // MARK: - Tab 栏
 
 struct MainTabBar: View {
@@ -135,6 +152,8 @@ struct RootView: View {
     @State private var pendingExerciseDetail: ExerciseLibraryItem?
     /// 首次启动（或清除全部数据后）展示引导（页面 47）。
     @State private var showOnboarding = !ProfileSettings.hasCompletedOnboarding
+    /// 当前是否有页面处于沉浸状态（沉浸时隐藏全局 Tab 栏）
+    @State private var sessionImmersive = false
 
     init(repository: FitnessRepository) {
         self.repository = repository
@@ -151,9 +170,14 @@ struct RootView: View {
                 tabContent
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                MainTabBar(selection: $selection)
+                // 沉浸页（动作详情等）在栈中时整栏收起，
+                // 底部不被 Tab 栏占据，内容安全区自动扩展到底。
+                if !sessionImmersive {
+                    MainTabBar(selection: $selection)
+                }
             }
         }
+        .onPreferenceChange(SessionImmersiveKey.self) { sessionImmersive = $0 }
         .preferredColorScheme(.dark)
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingView(
