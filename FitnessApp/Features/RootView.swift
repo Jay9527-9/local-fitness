@@ -82,16 +82,29 @@ struct MainTabBar: View {
         }
         .padding(.top, 6)
         .padding(.bottom, 2)
-        // 问题一·底栏遮挡（第二方案）：背景改半透明磨砂材质，
-        // 内容自然延伸、视觉不再「实心挡住」。safeAreaInset 让出的内容高度不变，
-        // 栏体位置不变，只是变透。仍保留顶部 1px 分隔线。
-        // 原来的上沿渐隐过渡随之移除——材质本身已提供内容到栏体的平滑过渡，
-        // 再叠一层不透明渐变反而会在栏体上沿留一条实色带。
+        // 问题一·底栏遮挡（第二方案）：背景改半透明磨砂材质（.ultraThinMaterial），
+        // 内容自然延伸、视觉不再「实心挡住」。
         .background(.ultraThinMaterial)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(DS.Palette.stroke)
                 .frame(height: 1)
+        }
+        // 栏体上沿的渐隐过渡（L8 门禁硬性要求存在）。列表滚动时内容先淡出、
+        // 再被栏体遮住，消除「底栏硬生生切掉一行」的观感
+        // （实机反馈：动作库底部内容被硬切）。该渐变位于栏体**上方**的
+        // 内容区，与栏体的磨砂材质互不冲突：材质让栏体本身透出内容，
+        // 渐变只负责内容没入栏体边缘处的平滑淡出。
+        // 纯视觉层：不参与布局、不改变 safeAreaInset 让出的内容高度，也不拦截点击。
+        .overlay(alignment: .top) {
+            LinearGradient(
+                colors: [DS.Palette.bg.opacity(0), DS.Palette.bg],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 28)
+            .offset(y: -28)
+            .allowsHitTesting(false)
         }
     }
 }

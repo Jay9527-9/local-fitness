@@ -229,6 +229,30 @@ for rel, code in CODE.items():
             head = code[:m.start()]
             if head.rfind("enum ExerciseThumbnailCache") > head.rfind("struct ExerciseThumbnail"):
                 continue
+        # 白名单：动作动画缓存 animationImage(for:) 是静态缓存函数，由
+        # ExerciseAnimationView 的 .task(id:) 在异步上下文调用，不在任何
+        # 视图的 body 求值路径上，作为缓存实现放行（与 ExerciseThumbnailCache 同理）。
+        # 这里必须用 UIImage(contentsOfFile: 而非 UIImage(data:)：系统图像解码器
+        # 只有「按文件路径解码」才会把 GIF 的多帧回填到 UIImage.images，
+        # UIImage(data:) 在部分系统版本上只取首帧，GifImageView 就无从逐帧循环
+        # —— 这正是之前「动作 GIF 不动」的根因之一。
+        if "ExerciseMedia.swift" in rel:
+            fn_start = code.rfind("static func animationImage", 0, m.start())
+            if fn_start >= 0:
+                i = code.find("{", fn_start)
+                if i >= 0:
+                    depth = 0
+                    closed = -1
+                    for j in range(i, len(code)):
+                        if code[j] == "{":
+                            depth += 1
+                        elif code[j] == "}":
+                            depth -= 1
+                            if depth == 0:
+                                closed = j
+                                break
+                    if closed >= 0 and m.start() < closed:
+                        continue
         line_no = code[:m.start()].count("\n") + 1
         SYNC_DECODE.append("%s:%d" % (rel, line_no))
 
