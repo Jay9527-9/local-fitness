@@ -170,11 +170,17 @@ struct RootView: View {
                 tabContent
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                // 沉浸页（动作详情等）在栈中时整栏收起，
-                // 底部不被 Tab 栏占据，内容安全区自动扩展到底。
-                if !sessionImmersive {
-                    MainTabBar(selection: $selection)
-                }
+                // 沉浸页（动作详情等）在栈中时整栏收起，底部不被 Tab 栏占据，
+                // 内容安全区自动扩展到底。
+                // 关键：始终返回同一个 MainTabBar，仅用 opacity / frame(height:)
+                // 驱动显隐，而不是用 `if` 在「有 / 无」两种视图间切换。
+                // safeAreaInset 会在内容视图类型变化时缓存旧的 inset 高度，
+                // 导致沉浸态下 Tab 栏高度没真正归零、与详情页自己的底部
+                // safeAreaInset 叠加 —— 表现为「添加到训练」按钮被底栏挡住。
+                MainTabBar(selection: $selection)
+                    .opacity(sessionImmersive ? 0 : 1)
+                    .frame(height: sessionImmersive ? 0 : nil)
+                    .allowsHitTesting(!sessionImmersive)
             }
         }
         .onPreferenceChange(SessionImmersiveKey.self) { sessionImmersive = $0 }
@@ -355,6 +361,7 @@ private struct ProfileTab: View {
                 planRefreshToken &+= 1
             }) {
                 exercisePickerSheet
+                    .presentationDetents([.large])
             }
             .bottomDrawer(
                 isPresented: $showNewPlanSheet,
@@ -839,7 +846,9 @@ private struct ProfileTab: View {
                 },
                 pickerTitle: pickerContext?.pickerTitle ?? "选择动作"
             )
+            .frame(maxHeight: .infinity)
         }
+        .background(DS.Palette.bg)
     }
 
     /// 选中动作后按上下文写库（追加 / 替换计划条目 / 替换训练中动作）。
@@ -1744,7 +1753,9 @@ private struct TrainingTab: View {
                 },
                 pickerTitle: pickerContext?.pickerTitle ?? "选择动作"
             )
+            .frame(maxHeight: .infinity)
         }
+        .background(DS.Palette.bg)
     }
 
     /// 选中后落库，按上下文分三种情况：
@@ -1933,6 +1944,10 @@ private struct ExercisesTab: View {
     /// 正在编辑的自定义动作，nil 表示新建
     @State private var editingCustom: ExerciseLibraryItem?
     @State private var showEditor = false
+    @State private var pickerContext: ExercisePickerContext?
+    @State private var showExercisePicker = false
+    /// 选中动作落库后刷新计划详情
+    @State private var planRefreshToken = 0
 
     init(
         repository: FitnessRepository,
@@ -1973,6 +1988,13 @@ private struct ExercisesTab: View {
                     // 编辑是从详情页进入的，删除后回到动作库根页。
                     exercisePopToRoot()
                 }
+            }
+            .sheet(isPresented: $showExercisePicker, onDismiss: {
+                pickerContext = nil
+                planRefreshToken &+= 1
+            }) {
+                exercisePickerSheet
+                    .presentationDetents([.large])
             }
     }
 
@@ -2084,6 +2106,7 @@ private struct ExercisesTab: View {
             PlanDetailView(
                 repository: repository,
                 planID: planID,
+                refreshToken: planRefreshToken,
                 onStartTraining: { _ in
                     // 训练执行页尚未实现。这一路是从动作库进来的，
                     // 保持留在计划详情页比跳到占位页更合理。
@@ -2091,9 +2114,9 @@ private struct ExercisesTab: View {
                 onOpenExerciseConfig: { entry in
                     try? repository.updatePlanExercise(entry, inPlan: planID)
                 },
-                onAddExercise: { _ in
-                    viewModel.reloadAfterExternalChange()
-                    exercisePopToRoot()
+                onAddExercise: { targetPlanID in
+                    pickerContext = ExercisePickerContext(planID: targetPlanID)
+                    showExercisePicker = true
                 },
                 onReplaceExercise: { _ in },
                 onOpenPlan: { copyID in
@@ -2115,6 +2138,61 @@ private struct ExercisesTab: View {
     private func exercisePopToRoot() {
         path = NavigationPath()
         viewModel.reloadAfterExternalChange()
+    }
+
+    // MARK: - 动作选择器
+
+    /// 从动作库这条栈挑选动作加入计划：追加到计划末尾（或替换条目）并刷新计划详情。
+    private func commitPick(_ item: ExerciseLibraryItem) {
+        guard let planID = pickerContext?.planID else {
+            showExercisePicker = false
+            return
+        }
+        if let entryID = pickerContext?.replacingEntryID {
+            try? repository.replacePlanExercise(entryID, inPlan: planID, withExerciseID: item.id)
+        } else {
+            try? repository.appendExercise(PlanExercise(exerciseID: item.id), toPlan: planID)
+        }
+        Haptics.success()
+        showExercisePicker = false
+    }
+
+    /// 加入计划用的动作选择器 sheet（与 TrainingTab / RootView 同构）。
+    private var exercisePickerSheet: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("取消") { showExercisePicker = false }
+                    .font(DS.Typography.body)
+                    .foregroundStyle(DS.Palette.textSecondary)
+
+                Spacer()
+
+                Text(pickerContext?.pickerTitle ?? "选择动作")
+                    .font(DS.Typography.cardTitle)
+                    .foregroundStyle(DS.Palette.textPrimary)
+
+                Spacer()
+
+                Text("取消")
+                    .font(DS.Typography.body)
+                    .foregroundStyle(.clear)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, DS.Spacing.page)
+            .padding(.vertical, DS.Spacing.item)
+            .background(DS.Palette.bg)
+
+            ExerciseLibraryView(
+                viewModel: viewModel,
+                onOpenExercise: { commitPick($0) },
+                onNewCustomExercise: {},
+                onEditCustomExercise: { _ in },
+                onAddToWorkout: { commitPick($0) },
+                pickerTitle: pickerContext?.pickerTitle ?? "选择动作"
+            )
+            .frame(maxHeight: .infinity)
+        }
+        .background(DS.Palette.bg)
     }
 
     /// 返回上一页。只弹一层，不清空整栈。
